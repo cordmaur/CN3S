@@ -1,0 +1,25 @@
+// For format details, see https://aka.ms/devcontainer.json.
+{
+    "name": "CN3S",
+    "image": "cordmaur/planetary:v5",
+    "mounts": [
+        // Bind-mount a local data folder into the container.
+        // Set CN3S_DATA_FOLDER on the host to the path of your data directory.
+        "source=C:/Users/mauricio/OneDrive - Agência Nacional de Águas/data,target=/data,type=bind"
+    ],
+    "runArgs": [
+        "--memory=16g",
+        "--memory-swap=24g"
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "charliermarsh.ruff",
+                "ms-python.python",
+                "ms-python.mypy-type-checker",
+                "ms-toolsai.jupyter"
+            ]
+        }
+    },
+    "postCreateCommand": "pip install -e /workspaces/CN3S --break-system-packages"
+}

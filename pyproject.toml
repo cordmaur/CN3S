@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cn3s"
+version = "0.1.0"
+description = "CN3S rainfall-runoff model (Curve Number with Three-Step Antecedent Precipitation)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy",
+    "ruff",
+    "pytest",
+    "numpy-stubs",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cn3s"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["EXE002", "T201"]
