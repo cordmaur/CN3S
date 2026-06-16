@@ -15,14 +15,12 @@ if TYPE_CHECKING:
 
 @dataclass
 class CN3SParams:
-    """Parameters for the CN3S rainfall-runoff model.
+    """
+    Parameters for the CN3S rainfall-runoff model.
 
     Stores both basin descriptors and the six calibration parameters.
     All numeric fields default to values calibrated for the Porto Uruaçu basin.
     """
-
-    bacia: str = "Porto Uruaçu"
-    """Basin name (identifier only, not used in calculations)."""
 
     area: float = 34334.0
     """Drainage area in km²."""
@@ -48,9 +46,63 @@ class CN3SParams:
     k2: float = 0.305
     """Baseflow recession coefficient (fraction of R released per step, Eq. 12)."""
 
+    @classmethod
+    def from_vector(
+        cls,
+        vector: Iterable[float],
+        area: float,
+    ) -> CN3SParams:
+        """
+        Create a CN3SParams instance from a flat vector of optimizable parameters.
+
+        The vector must contain exactly 7 values in the order:
+        ``[r0, cn_i, alfa, beta, k0, k1, k2]``.
+        Basin name and drainage area are fixed descriptors passed separately.
+
+        Args:
+            vector: Iterable of 7 floats — ``[r0, cn_i, alfa, beta, k0, k1, k2]``.
+            area: Drainage area in km².
+
+        Returns:
+            CN3SParams instance with the given parameter values.
+
+        """
+        r0, cn_i, alfa, beta, k0, k1, k2 = vector
+        return cls(
+            area=area,
+            r0=r0,
+            cn_i=cn_i,
+            alfa=alfa,
+            beta=beta,
+            k0=k0,
+            k1=k1,
+            k2=k2,
+        )
+
+    def as_list(self) -> list[float]:
+        """
+        Return the optimizable parameters as a flat vector.
+
+        The order of values is: ``[r0, cn_i, alfa, beta, k0, k1, k2]``.
+
+        Returns:
+            List of 7 floats corresponding to the optimizable parameters.
+
+        """
+        return [
+            self.r0,
+            self.cn_i,
+            self.alfa,
+            self.beta,
+            self.k0,
+            self.k1,
+            self.k2,
+        ]
+
 
 class CN3S:
-    """CN3S (Curve Number with Three-Step Antecedent Precipitation) model.
+    """
+    CN3S (Curve Number with Three-Step Antecedent Precipitation) model.
 
     Computes mean monthly discharge from mean areal precipitation. The model
     separates total runoff into direct runoff (Qup, surface) and baseflow (Qlow,
@@ -75,7 +127,8 @@ class CN3S:
     """
 
     def __init__(self, params: CN3SParams) -> None:
-        """Store calibration parameters for later use in each computation step.
+        """
+        Store calibration parameters for later use in each computation step.
 
         Args:
             params: Basin and model calibration parameters.
@@ -88,7 +141,8 @@ class CN3S:
 
     # -------- CORE METHODS -------- #
     def vj(self, past_prec: Iterable[float]) -> float:
-        """Compute antecedent precipitation coefficient Vj, clamped to [1, 3].
+        """
+        Compute antecedent precipitation coefficient Vj, clamped to [1, 3].
 
         Weights the three previous monthly precipitation totals using an
         exponential decay controlled by K0, then scales by BETA (Eq. 04).
@@ -112,10 +166,11 @@ class CN3S:
         vj = 1.0 + beta * ap
 
         # Vj must remain within the valid [1, 3] range
-        return round(min(max(vj, 1.0), 3.0), 2)
+        return min(max(vj, 0.0), 5.0)
 
     def cnv(self, vj: float) -> float:
-        """Compute the adjusted Curve Number CNVj for the current antecedent condition.
+        """
+        Compute the adjusted Curve Number CNVj for the current antecedent condition.
 
         Applies the power-law regression (Eq. 09) derived from SCS CN tables,
         relating CN-I (dry) to CN for any moisture state Vj:
@@ -135,10 +190,11 @@ class CN3S:
         cnv = 0.925 * cn_i**1.019 * vj**exponent
 
         # Clip to valid CN range
-        return float(np.clip(cnv, 0.0, 100.0))
+        return float(np.clip(cnv, 0.0, 99.999))
 
     def s(self, cnv: float) -> float:
-        """Compute maximum potential retention S from the adjusted Curve Number.
+        """
+        Compute maximum potential retention S from the adjusted Curve Number.
 
         Converts the dimensionless CN to a retention depth using the SCS
         formula (Eq. 05), scaled from inches to millimetres (* 25.4).
@@ -152,10 +208,12 @@ class CN3S:
         """
         # Standard SCS: S (in) = 1000/CN - 10; convert to mm by * 25.4
         s = ((1000.0 / cnv) - 10.0) * 25.4
-        return round(max(s, 0.0), 2)
+
+        return max(s, 0.0)
 
     def q_up(self, prec: float, s: float) -> float:
-        """Compute direct runoff depth Qup using the SCS runoff equation (Eq. 02).
+        """
+        Compute direct runoff depth Qup using the SCS runoff equation (Eq. 02).
 
         Returns zero when precipitation does not exceed the initial abstraction
         threshold (alfa * S). Above that threshold:
@@ -175,11 +233,16 @@ class CN3S:
         if prec < s * alfa:
             return 0.0
 
-        q_up = (prec - s * alfa) ** 2.0 / (prec + (1.0 - alfa) * s)
-        return round(q_up, 2)
+        try:
+            q_up = (prec - s * alfa) ** 2.0 / (prec + (1.0 - alfa) * s)
+        except ZeroDivisionError:
+            print(prec, alfa, s)
+            raise
+        return float(q_up)
 
     def r1(self, prec: float, q_up: float, r0: float | None = None) -> float:
-        """Compute groundwater storage after recharge, before baseflow depletion (Eq. 11).
+        """
+        Compute groundwater storage after recharge, before baseflow depletion (Eq. 11).
 
         A fraction K1 of net rainfall (P - Qup) recharges the aquifer each month.
 
@@ -197,10 +260,11 @@ class CN3S:
         k1 = self.params.k1
 
         r = effective_r0 + k1 * (prec - q_up)
-        return round(r, 2)
+        return r
 
     def q_low(self, r1: float) -> float:
-        """Compute baseflow depth Qlow as a linear recession from storage (Eq. 12).
+        """
+        Compute baseflow depth Qlow as a linear recession from storage (Eq. 12).
 
         Args:
             r1: Groundwater storage before depletion (mm) from :meth:`r1`.
@@ -210,10 +274,11 @@ class CN3S:
 
         """
         q_low = self.params.k2 * r1
-        return round(q_low, 2)
+        return q_low
 
     def r(self, r1: float, q_low: float) -> float:
-        """Compute end-of-period groundwater storage after baseflow release (Eq. 13).
+        """
+        Compute end-of-period groundwater storage after baseflow release (Eq. 13).
 
         Args:
             r1: Groundwater storage before baseflow depletion (mm).
@@ -223,10 +288,11 @@ class CN3S:
             End-of-period groundwater storage in mm, rounded to 2 decimal places.
 
         """
-        return round(r1 - q_low, 2)
+        return r1 - q_low
 
     def q_calc_mm(self, q_up: float, q_low: float) -> float:
-        """Compute total monthly runoff as the sum of direct runoff and baseflow (Eq. 14).
+        """
+        Compute total monthly runoff as the sum of direct runoff and baseflow (Eq. 14).
 
         Args:
             q_up: Direct runoff depth (mm).
@@ -236,10 +302,11 @@ class CN3S:
             Total runoff depth in mm, rounded to 2 decimal places.
 
         """
-        return round(q_up + q_low, 2)
+        return q_up + q_low
 
     def q_calc_m3s(self, q_mm: float) -> float:
-        """Convert monthly runoff depth to mean monthly discharge in m³/s.
+        """
+        Convert monthly runoff depth to mean monthly discharge in m³/s.
 
         Assumes a uniform 30-day month for the time-averaging step.
 
@@ -257,7 +324,7 @@ class CN3S:
         seconds_per_month = 24.0 * 3600.0 * 30.0
         q_m3s = (q_mm / 1000.0) * area_m2 / seconds_per_month
 
-        return round(q_m3s, 2)
+        return q_m3s
 
     # -------- PUBLIC METHODS -------- #
     def reset(self) -> None:
@@ -265,7 +332,8 @@ class CN3S:
         self.results = pd.DataFrame()
 
     def step(self, prec: float, past_prec: Iterable[float] | None = None) -> pd.Series:
-        """Perform a full monthly runoff calculation from antecedent and current precipitation.
+        """
+        Perform a full monthly runoff calculation from antecedent and current precipitation.
 
         Args:
             past_prec: Iterable of the last 3 monthly precipitation totals in mm,
@@ -273,7 +341,8 @@ class CN3S:
             prec: Mean areal precipitation for the current month (mm).
 
         Returns:
-            Pandas Series containing the full set of step results, including mean monthly discharge in m³/s.
+            Pandas Series containing the full set of step results, including mean monthly
+            discharge in m³/s.
 
         """
         # Check if we have previous precipitation to run the model
@@ -282,14 +351,15 @@ class CN3S:
             raise ValueError(msg)
 
         if past_prec is None:
-            # Past prec will be formed by the last prec and the two preceding values from the last step
-            past_prec_aux = self.results.iloc[-1]["past_prec"][:2]
-            past_prec = [self.results.iloc[-1]["prec"], *past_prec_aux]
+            # Past prec will be formed by the last prec and the two preceding values
+            # from the last step.
+            past_prec_aux = self.results["past_prec"].iloc[-1][:2]
+            past_prec = [self.results["prec"].iloc[-1], *past_prec_aux]
 
         past_prec = cast("list[float]", list(past_prec))  # Type hint for mypy
 
         # Check if we have previous computation to get r0
-        r0 = self.results.iloc[-1]["r"] if not self.results.empty else None
+        r0 = self.results["r"].iloc[-1] if not self.results.empty else None
 
         # Run the full sequence of calculations for this time step
         vj = self.vj(past_prec)
@@ -325,12 +395,14 @@ class CN3S:
 
         return step_results_series
 
-    def run(self, prec_series: list[float]) -> None:
-        """Run the model over a full time series of monthly precipitation values.
+    def run(self, prec_series: list[float], *, pbar: bool = True) -> None:
+        """
+        Run the model over a full time series of monthly precipitation values.
 
         Args:
             prec_series: List of mean areal precipitation values in mm,
                 ordered by time (most recent first).
+            pbar: Whether to display a progress bar using tqdm.
 
         Returns:
             None. Results are stored internally in the `results` attribute.
@@ -346,6 +418,12 @@ class CN3S:
         prec = prec_series.pop(0)
         self.step(prec, past_prec)
 
+        # If a progress bar is requested, wrap the remaining iterations with tqdm
+        if pbar:
+            iterator = tqdm(prec_series, desc="Running CN3S model", unit="step")
+        else:
+            iterator = prec_series
+
         # Run the remaining iterations with progress bar
-        for prec in tqdm(prec_series, desc="Running CN3S model", unit="step"):
+        for prec in iterator:
             self.step(prec)

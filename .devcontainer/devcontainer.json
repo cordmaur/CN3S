@@ -2,10 +2,11 @@
 {
     "name": "CN3S",
     "image": "cordmaur/planetary:v5",
+    // "image": "cordmaur/merge-downloader:v1",
     "mounts": [
         // Bind-mount a local data folder into the container.
         // Set CN3S_DATA_FOLDER on the host to the path of your data directory.
-        "source=C:/Users/mauricio/OneDrive - Agência Nacional de Águas/data,target=/data,type=bind"
+        "source=E:/OneDrive/OneDrive - Agência Nacional de Águas/data,target=/data,type=bind"
     ],
     "runArgs": [
         "--memory=16g",
@@ -21,5 +22,6 @@
             ]
         }
     },
-    "postCreateCommand": "pip install -e /workspaces/CN3S --break-system-packages"
+    "postCreateCommand": "apt-get update && apt-get install -y libglib2.0-0 && pip install -e . --break-system-packages && pip install git+https://github.com/cordmaur/merge-downloader.git@databricks2 --break-system-packages"
+    // "postCreateCommand": "pip install -e . --break-system-packages"
 }
