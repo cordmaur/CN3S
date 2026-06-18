@@ -27,7 +27,7 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["EXE002", "T201", "D203", "D212", "TRY300", "BLE001", "S608", "S101"]
+ignore = ["EXE002", "T201", "D203", "D212", "TRY300", "BLE001", "S608", "S101", "PLR0913"]
 
 [tool.mypy]
 files = [
