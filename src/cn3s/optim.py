@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-import math
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from plotly.graph_objs import Figure
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from scipy.optimize import differential_evolution
-from sklearn.metrics import r2_score
+from scipy.optimize import OptimizeResult, differential_evolution
 
+from cn3s.metrics import compute_nse_from_frame
 from cn3s.model import CN3S, CN3SParams
+from cn3s.objectives import Objective, Objectives
 
 
 class CN3SOptimizer:
@@ -23,8 +26,8 @@ class CN3SOptimizer:
     ``scipy.optimize.differential_evolution`` to minimise negative Nash-Sutcliffe
     Efficiency (NSE) on the training period.
 
-    A callback is invoked after every generation to report both train and test NSE
-    and to persist the best model (by test NSE) in :attr:`model`.
+    A callback is invoked after every generation to report progress and store
+    a tabular history of the current best candidate.
 
     The optimiser mutates :attr:`model` in place throughout calibration — the
     model passed at construction is used both for objective evaluations and as the
@@ -49,8 +52,8 @@ class CN3SOptimizer:
 
     Attributes:
         model: The :class:`~cn3s.model.CN3S` instance being calibrated.
-            After at least one generation its parameters reflect the best
-            test-NSE candidate found so far.
+            After at least one callback generation its parameters reflect the
+            best candidate reported so far by SciPy.
         train_ratio: Fraction of the aligned record used for calibration.
 
     """
@@ -60,24 +63,15 @@ class CN3SOptimizer:
     _BASE_BOUNDS: ClassVar[list[tuple[float, float]]] = [
         (50.0, 1000.0),  # r0:   initial groundwater storage (mm)
         (1.0, 130.0),  # cn_i: Curve Number anchor
-        (0.05, 100),  # alfa: initial abstraction ratio
-        (1e-4, 20),  # beta: antecedent precipitation sensitivity
-        (0.01, 30),  # k0:   exponential decay factor
-        (0.01, 50),  # k1:   groundwater recharge fraction
-        (0.01, 2),  # k2:   baseflow recession coefficient
-        # act bound appended dynamically: (0, max_act)
-    ]
-
-    _BASE_BOUNDS_NEW: ClassVar[list[tuple[float, float]]] = [
-        (0.0, 1000.0),  # r0:   initial groundwater storage (mm)
-        (1.0, 100.0),  # cn_i: Curve Number anchor
-        (0.05, 0.3),  # alfa: initial abstraction ratio
-        (1e-4, 0.01),  # beta: antecedent precipitation sensitivity
+        (0.05, 1),  # alfa: initial abstraction ratio
+        (1e-4, 1),  # beta: antecedent precipitation sensitivity
         (0.01, 1),  # k0:   exponential decay factor
         (0.01, 1),  # k1:   groundwater recharge fraction
         (0.01, 1),  # k2:   baseflow recession coefficient
         # act bound appended dynamically: (0, max_act)
     ]
+
+    _INTEGRALITY: ClassVar[list[bool]] = [False] * 7 + [True]  # act is integral
 
     def __init__(
         self,
@@ -86,7 +80,7 @@ class CN3SOptimizer:
         model: CN3S,
         train_ratio: float = 0.7,
         max_act: int = 30,
-        weights_power: float = 1.0,
+        objective: str | Objective | None = None,
     ) -> None:
         """
         Initialise the optimiser and prepare train / test splits.
@@ -102,7 +96,10 @@ class CN3SOptimizer:
             max_act: Upper bound (in days) for the Average Concentration Time
                 parameter search.  Must be a non-negative integer.  Increase
                 this for large basins with long travel times.  Defaults to 30.
-            weights_power: Exponent for weighting observations in the NSE calculation.
+            objective: Objective to minimise.  Accepts an :class:`~cn3s.objectives.Objective`
+                instance, a plain callable (wrapped automatically), or a string
+                (class name matched against built-in objectives). Defaults to
+                :class:`~cn3s.objectives.NSETopBlend`.
 
         """
         # Validate and store input parameters
@@ -110,16 +107,13 @@ class CN3SOptimizer:
 
         # Store inputs and prepare for calibration
         self.model = model  # The main model
-        self.params_dict: dict[int, CN3SParams] = {}  # Dict with the params for each iteration
+        self.history = pd.DataFrame()
+        self.result: OptimizeResult | None = None
 
         # Internal state
         self._area: float = model.params.area  # Basin area
-        self._best_nse: float = -math.inf  # Best NSE found so far
-        self._best_params_vec: npt.NDArray[np.float64] | None = None
         self._warmup_steps = model.params.warmup_steps  # Number of past precipitations to be used
-        self._weights_power = (
-            weights_power  # Exponent for weighting observations in the NSE calculation
-        )
+        self.objective = self._resolve_objective(objective)
 
         # Keep raw series for per-candidate model evaluations
         self._prec_raw = prec
@@ -128,7 +122,7 @@ class CN3SOptimizer:
         # Build the bounds list, appending the act bound
         self._bounds_list: list[tuple[float, float]] = [
             *self._BASE_BOUNDS,
-            (0.0, float(self._max_act)),  # act: Average Concentration Time (days)
+            (0, int(self._max_act)),  # act: Average Concentration Time (days)
         ]
 
         # Align at ACT=0 to determine the reference train/test cutoff date
@@ -181,20 +175,43 @@ class CN3SOptimizer:
         self.train_ratio = train_ratio
         self._max_act = max_act
 
+    def _resolve_objective(self, objective: str | Objective | None) -> Objective:
+        """Resolve objective from str name, Objective instance, or None (default)."""
+        if objective is None:
+            return Objectives.NSETopBlend
+        if isinstance(objective, Objective):
+            return objective
+        if callable(objective):
+            return Objective(objective)
+        if isinstance(objective, str):
+            # Match by class name against all Objective subclass instances on Objectives
+            for attr in vars(Objectives).values():
+                if isinstance(attr, Objective) and type(attr).__name__ == objective:
+                    return attr
+            available = [
+                type(v).__name__ for v in vars(Objectives).values() if isinstance(v, Objective)
+            ]
+            msg = f"No built-in objective named '{objective}'. Available: {available}"
+            raise ValueError(msg)
+        msg = f"objective must be a str, Objective instance, or callable; got {type(objective)!r}"
+        raise TypeError(msg)
+
     def _run_model(self, params_vec: npt.NDArray[np.float64]) -> pd.DataFrame:
         """
-        Update model parameters, run it, and return results aligned with observed_q.
+        Update model parameters, run the full series, and return aligned results.
 
         Mutates ``self.model.params`` in place.  When called from parallel workers
         (``workers=-1``) each worker operates on its own pickled copy of ``self``,
-        so there are no race conditions on the main-process model.
+        so there are no race conditions on the main-process model. Train/test
+        splitting is handled later at scoring time so that model state is always
+        propagated across the full chronology.
 
         Args:
             params_vec: Flat array of 8 parameter values in the order expected
                 by :meth:`~cn3s.model.CN3SParams.from_vector`.
 
         Returns:
-            DataFrame with columns ``q_m3s`` (modelled) and ``observed_q``,
+            DataFrame with columns ``q_m3s`` (modelled) and ``obs_q_m3s``,
             indexed by the shifted date index (warm-up rows excluded).
 
         """
@@ -207,13 +224,27 @@ class CN3SOptimizer:
 
         self.model.run(self._prec_raw, pbar=False)
 
-        return (
-            self.model.results[["q_m3s"]]
-            .join(self._q_raw.rename("observed_q"), how="inner")
-            .dropna()
+        self.model.results = self.model.results.join(
+            self._q_raw.rename("obs_q_m3s"),
+            how="left",
+        ).dropna()
+
+        return self.model.results[["q_m3s", "obs_q_m3s"]]
+
+    def _select_subset(self, df: pd.DataFrame, *, train: bool) -> pd.DataFrame:
+        """Select the train or test subset using the fixed calendar cutoff."""
+        return df.loc[: self._train_cutoff] if train else df.loc[self._train_cutoff :]
+
+    def _nse_on_subset(self, subset: pd.DataFrame) -> float:
+        """Compute NSE on an already-selected subset."""
+        return compute_nse_from_frame(
+            subset,
+            observed_col="obs_q_m3s",
+            simulated_col="q_m3s",
+            on_too_few="neg_inf",
         )
 
-    def _nse(self, df: pd.DataFrame, *, use_weights: bool, train: bool) -> float:
+    def _nse(self, df: pd.DataFrame, *, train: bool) -> float:
         """
         Compute Nash-Sutcliffe Efficiency on the train or test subset.
 
@@ -223,25 +254,124 @@ class CN3SOptimizer:
 
         Args:
             df: Aligned DataFrame with ``q_m3s`` and ``observed_q`` columns.
-            use_weights: Whether to use the weights for each observation.
             train: If ``True`` evaluate on the train period; otherwise test.
 
         Returns:
             NSE (r² score). Returns ``-inf`` when the subset is too small.
 
         """
-        subset = df.loc[: self._train_cutoff] if train else df.loc[self._train_cutoff :]
+        subset = self._select_subset(df, train=train)
+        return self._nse_on_subset(subset)
 
-        if len(subset) < 2:  # noqa: PLR2004
-            return -math.inf
+    def _objective_value(self, df: pd.DataFrame, *, train: bool) -> float:
+        """
+        Compute the scalar objective on either the train or test subset.
 
-        weights = (
-            subset["observed_q"] ** self._weights_power / subset["observed_q"].mean()
-            if use_weights
-            else None
+        The objective implementation is selected at construction time.
+        """
+        subset = self._select_subset(df, train=train)
+        return self.objective(subset)
+
+    def add_history(
+        self,
+        params_vec: npt.NDArray[np.float64],
+        *,
+        step: int,
+        train_objective: float,
+        test_objective: float | None,
+        df: pd.DataFrame | None,
+    ) -> None:
+        """Append or update one optimizer-history row keyed by step."""
+        params = CN3SParams.from_vector(
+            params_vec,
+            area=self._area,
+            warmup_steps=self._warmup_steps,
         )
 
-        return float(r2_score(subset["observed_q"], subset["q_m3s"], sample_weight=weights))
+        row = {
+            "train_objective": train_objective,
+            "test_objective": test_objective,
+            "train_nse": self._nse(df, train=True) if df is not None else None,
+            "test_nse": self._nse(df, train=False) if df is not None else None,
+            "r0": params.r0,
+            "cn_i": params.cn_i,
+            "alfa": params.alfa,
+            "beta": params.beta,
+            "k0": params.k0,
+            "k1": params.k1,
+            "k2": params.k2,
+            "act": params.act,
+            "params": params,
+        }
+
+        # Keep history keyed by optimizer step for stable lookups and plotting.
+        self.history.loc[step, list(row.keys())] = list(row.values())
+        self.history.index.name = "step"
+
+    def evaluate_step(self, step: int) -> dict[str, float]:
+        """
+        Re-evaluate a stored optimizer step and return train/test metrics.
+
+        Re-runs CN3S on the full precipitation series for the parameters stored
+        at ``step`` and computes objective and NSE values on train and test splits.
+        The computed metrics are also persisted back into :attr:`history`.
+
+        Args:
+            step: Step index in :attr:`history`.
+
+        Returns:
+            Dict with ``train_objective``, ``test_objective``, ``train_nse``,
+            and ``test_nse``.
+
+        Raises:
+            ValueError: If history is empty or parameter fields are missing.
+            KeyError: If the requested step does not exist.
+
+        """
+        if self.history.empty:
+            msg = "History is empty. Run optimize() before evaluating a step."
+            raise ValueError(msg)
+
+        if step not in self.history.index:
+            msg = f"Step {step} not found in history index."
+            raise KeyError(msg)
+
+        row = self.history.loc[step]
+        if isinstance(row, pd.DataFrame):
+            row = row.iloc[-1]
+
+        params_obj = row.get("params")
+        if isinstance(params_obj, CN3SParams):
+            params_vec = np.asarray(params_obj.as_list(), dtype=np.float64)
+        else:
+            required = ["r0", "cn_i", "alfa", "beta", "k0", "k1", "k2", "act"]
+            missing = [name for name in required if name not in row.index or pd.isna(row[name])]
+            if missing:
+                msg = f"History step {step} is missing parameter values: {missing}"
+                raise ValueError(msg)
+
+            params_vec = np.asarray([float(row[name]) for name in required], dtype=np.float64)
+
+        df = self._run_model(params_vec)
+        train_objective = self._objective_value(df, train=True)
+        test_objective = self._objective_value(df, train=False)
+        train_nse = self._nse(df, train=True)
+        test_nse = self._nse(df, train=False)
+
+        self.add_history(
+            params_vec,
+            step=step,
+            train_objective=train_objective,
+            test_objective=test_objective,
+            df=df,
+        )
+
+        return {
+            "train_objective": train_objective,
+            "test_objective": test_objective,
+            "train_nse": train_nse,
+            "test_nse": test_nse,
+        }
 
     def _objective(self, params_vec: npt.NDArray[np.float64]) -> float:
         """
@@ -256,54 +386,35 @@ class CN3SOptimizer:
         """
         df = self._run_model(params_vec)
 
-        nse = self._nse(df, use_weights=False, train=True)
-        # nse_weighted = self._nse(df, use_weights=True, train=True)
+        return self._objective_value(df, train=True)
 
-        # To calculate NSE on top flows, let's get discharges higher than the 90th percentile of the observed discharge
-        df_top = df[df["observed_q"] > df["observed_q"].quantile(0.9)]
-        nse_top = self._nse(df_top, use_weights=False, train=True)
-
-        return 0.5 * (1 - nse) + 0.5 * (1 - nse_top)
-
-    def _callback(self, xk: Any, _: Any) -> None:  # noqa: ANN401
+    def _callback(self, intermediate_result: OptimizeResult) -> None:
         """
         Define the callback invoked by DE after every generation.
 
-        Computes train and test NSE for the current best vector ``xk``, prints
-        a one-line status, and updates :attr:`model` whenever a new best NSE is found.
+        Uses SciPy's best-so-far candidate for the generation, prints a one-line
+        status, and stores a history row.
 
         Args:
-            xk: Current best parameter vector (or DE intermediate result object).
-            _: Ignored argument (convergence progress).
+            intermediate_result: SciPy ``OptimizeResult`` carrying the current
+                best parameter vector in ``x`` and its objective value in ``fun``.
 
         """
-        # differential_evolution may pass an OptimizeResult object instead of a
-        # plain array when using certain workers modes — extract .x if needed.
-        params_vec: npt.NDArray[np.float64] = xk.x if hasattr(xk, "x") else np.asarray(xk)
+        params_vec = np.asarray(intermediate_result.x, dtype=np.float64)
+        train_objective = float(intermediate_result.fun)
 
-        # Estimate MEAN NSE (average of test and train)
-        df = self._run_model(params_vec)
-        train_nse = self._nse(df, use_weights=False, train=True)
-        test_nse = self._nse(df, use_weights=False, train=False)
-        mean_nse = (train_nse + test_nse) / 2
-
-        msg = f"{self.step} - Train NSE: {train_nse:.4f} | Test NSE: {test_nse:.4f}"
-        self.step += 1
-
-        # Regardless of the result, add the params to the dict for later inspection
-        self.params_dict[self.step] = CN3SParams.from_vector(
+        self.add_history(
             params_vec,
-            area=self._area,
-            warmup_steps=self._warmup_steps,
+            step=self.step,
+            train_objective=train_objective,
+            test_objective=None,
+            df=None,
         )
 
-        if mean_nse > self._best_nse:
-            self._best_nse = mean_nse
-            self._best_params_vec = params_vec.copy()
-            self._persist_model(params_vec)
-            msg += " <-- new best NSE!"
+        params_vec = [round(float(p), 2) for p in params_vec]
 
-        print(msg + f" ({self.model.params})")
+        print(f"{self.step} - Train objective: {train_objective:.4f} - {params_vec}")
+        self.step += 1
 
     def _persist_model(self, params_vec: npt.NDArray[np.float64]) -> None:
         """
@@ -316,20 +427,107 @@ class CN3SOptimizer:
             params_vec: Parameter vector to persist.
 
         """
+        self._run_model(params_vec)
+
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
+
+    def plot_step(
+        self,
+        step: int,
+        *,
+        q_headroom: float = 1.2,
+        prec_headroom: float = 1.5,
+        title: str = "CN3S: Simulated vs Observed",
+        show: bool = False,
+        height: int = 500,
+        width: int = 1000,
+    ) -> Figure:
+        """
+        Plot model results for a specific optimisation step.
+
+        Calls :meth:`evaluate_step` to re-run the model with the stored parameters,
+        then delegates to :meth:`~cn3s.model.CN3S.plot` with the train/test split
+        marker and train / test NSE values shown in the title.
+
+        Args:
+            step: Step index in :attr:`history`.
+            q_headroom: Multiplier applied to max discharge to set y-axis upper bound.
+            prec_headroom: Multiplier applied to max precipitation for y2 upper bound.
+            title: Figure title prefix.
+            show: Whether to immediately render the figure with ``fig.show()``.
+            height: Figure height in pixels.
+            width: Figure width in pixels.
+
+        Returns:
+            Plotly Figure object.
+
+        Raises:
+            ValueError: If history is empty or parameter fields are missing.
+            KeyError: If the requested step does not exist.
+            ImportError: If Plotly is not installed.
+
+        """
+        # Evaluate the step: updates model params, runs model, returns metrics
+        metrics = self.evaluate_step(step)
+        train_nse = metrics["train_nse"]
+        test_nse = metrics["test_nse"]
+
+        # Re-run the model without dropna so the full series is available for plotting.
+        # (evaluate_step internally calls _run_model which drops rows without obs_q.)
+        row = self.history.loc[step]
+        if isinstance(row, pd.DataFrame):
+            row = row.iloc[-1]
+
+        params_obj = row.get("params")
+        if isinstance(params_obj, CN3SParams):
+            params_vec = np.asarray(params_obj.as_list(), dtype=np.float64)
+        else:
+            required = ["r0", "cn_i", "alfa", "beta", "k0", "k1", "k2", "act"]
+            params_vec = np.asarray([float(row[name]) for name in required], dtype=np.float64)
+
         self.model.params = CN3SParams.from_vector(
             params_vec,
             area=self._area,
             warmup_steps=self._warmup_steps,
         )
         self.model.run(self._prec_raw, pbar=False)
+        self.model.results = self.model.results.join(
+            self._q_raw.rename("obs_q_m3s"),
+            how="left",
+        )
+        self.model.last_nse = train_nse
 
-        self.model.results = self.model.results.join(self._q_raw.rename("observed_q"), how="left")
+        # Locate the train/test split position in model.results by date.
+        split_pos = int((self.model.results.index < self._train_cutoff).sum())
+        split_pos = max(0, min(split_pos, len(self.model.results) - 1))
 
-    # ------------------------------------------------------------------ #
-    # Public API
-    # ------------------------------------------------------------------ #
+        # Generate the base figure via CN3S.plot
+        fig = self.model.plot(
+            split=split_pos,
+            q_headroom=q_headroom,
+            prec_headroom=prec_headroom,
+            title=title,
+            show=False,
+            height=height,
+            width=width,
+        )
 
-    def optimize(self, **de_kwargs: Any) -> None:  # noqa: ANN401
+        # Replace the trailing NSE line added by CN3S.plot with a train/test breakdown.
+        current_title: str = fig.layout.title.text  # type: ignore[union-attr]
+        nse_line = f"Train NSE = {train_nse:.3f} | Test NSE = {test_nse:.3f}"
+        new_title = current_title.rsplit("<br>", 1)[0] + f"<br>{nse_line}"
+        fig.update_layout(
+            title={"text": new_title, "x": 0.5, "xanchor": "center", "font": {"size": 12}},
+        )
+
+        if show:
+            fig.show()
+
+        return fig
+
+    def optimize(self, **de_kwargs: Any) -> None:
         """
         Run differential evolution to calibrate CN3S parameters.
 
@@ -338,9 +536,9 @@ class CN3SOptimizer:
         defaults set below.
 
         The run can be interrupted at any time with ``Ctrl+C``
-        (``KeyboardInterrupt``).  The ``finally`` block ensures :attr:`model`
-        is fully run on the entire aligned series with the best parameters
-        found so far and is immediately available after interruption.
+        (``KeyboardInterrupt``). On successful completion the final SciPy result
+        is persisted to :attr:`model`; during the run, callback updates keep
+        :attr:`model` aligned with the latest callback-best candidate.
 
         Default DE settings (override via ``**de_kwargs``):
 
@@ -366,12 +564,16 @@ class CN3SOptimizer:
         defaults.update(de_kwargs)
 
         scipy_bounds: Any = self._bounds_list  # scipy accepts list[tuple[float, float]]
+        self.history = pd.DataFrame()
+        self.result = None
+
         try:
             self.step = 1
-            differential_evolution(
+            self.result = differential_evolution(
                 func=self._objective,
                 bounds=scipy_bounds,
                 callback=self._callback,
+                integrality=self._INTEGRALITY,
                 **defaults,
             )
 
@@ -379,7 +581,6 @@ class CN3SOptimizer:
             print("\nOptimization interrupted — best model so far is in `optim.model`.")
 
         finally:
-            # Always re-run self.model on the full series with the best known
-            # parameters, regardless of how the run ended.
-            if self._best_params_vec is not None:
-                self._persist_model(self._best_params_vec)
+            # Persist the final SciPy best solution when the optimizer returns one.
+            if self.result is not None:
+                self._persist_model(np.asarray(self.result.x, dtype=np.float64))

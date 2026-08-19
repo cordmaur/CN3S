@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import r2_score
 from tqdm.auto import tqdm
+
+from cn3s.metrics import compute_nse
 
 try:
     import plotly.graph_objects as go
@@ -29,6 +30,9 @@ class CN3SParams:
     Stores both basin descriptors and the six calibration parameters.
     All numeric fields default to values calibrated for the Porto Uruaçu basin.
     """
+
+    name: str = "Unnamed"
+    """"Basin name (used for labeling plots and outputs)."""
 
     area: float = 34334.0
     """Drainage area in km²."""
@@ -162,15 +166,12 @@ class CN3S:
             params: Basin and model calibration parameters.
 
         """
-        if params.warmup_steps < 1:
-            msg = f"warmup_steps must be >= 1, got {params.warmup_steps!r}"
-            raise ValueError(msg)
-
         self.params = params
 
         # Init results dataframe
         self.results = pd.DataFrame()
         self.last_nse: float | None = None
+        self.last_vj: list[float] = []
 
     # -------- CORE METHODS -------- #
     def vj(self, past_prec: Iterable[float]) -> float:
@@ -203,7 +204,9 @@ class CN3S:
         vj = 1.0 + beta * ap
 
         # Vj remains within the implementation's valid range
-        return min(max(vj, 0.0), 5.0)
+        vj = min(max(vj, 0.0), 100.0)
+        self.last_vj.append(vj)
+        return vj
 
     def cnv(self, vj: float) -> float:
         """
@@ -275,6 +278,7 @@ class CN3S:
         except ZeroDivisionError:
             print(prec, alfa, s)
             raise
+
         return float(q_up)
 
     def r1(self, prec: float, q_up: float, r0: float | None = None) -> float:
@@ -358,7 +362,7 @@ class CN3S:
         area_m2 = self.params.area * 1e6
 
         # Convert depth: mm → m, scale by area, divide by seconds in a 30-day month
-        seconds_per_month = 24.0 * 3600.0 * 30.0
+        seconds_per_month = 24.0 * 3600.0
         q_m3s = (q_mm / 1000.0) * area_m2 / seconds_per_month
 
         return q_m3s
@@ -456,6 +460,7 @@ class CN3S:
             None. Results are stored internally in the `results` attribute.
 
         """
+        self.last_vj = []
         warmup_steps = self.params.warmup_steps
         minimum_len = warmup_steps + 1
         if len(prec_series) < minimum_len:
@@ -527,7 +532,7 @@ class CN3S:
         msg += f"From {valid.index[0]} to {valid.index[-1]}."
         print(msg)
 
-        nse = float(r2_score(valid["obs_q_m3s"], valid["q_m3s"]))
+        nse = compute_nse(valid["obs_q_m3s"], valid["q_m3s"])
         self.last_nse = nse
         return nse
 

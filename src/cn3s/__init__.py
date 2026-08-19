@@ -12,6 +12,7 @@ References:
 """
 
 from cn3s.model import CN3S, CN3SParams
+from cn3s.objectives import Objective, Objectives
 from cn3s.optim import CN3SOptimizer
 
-__all__ = ["CN3S", "CN3SOptimizer", "CN3SParams"]
+__all__ = ["CN3S", "CN3SOptimizer", "CN3SParams", "Objective", "Objectives"]
