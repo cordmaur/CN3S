@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
     from plotly.graph_objs import Figure
 
+    from utils import FREQ
+
 
 @dataclass
 class CN3SParams:
@@ -158,7 +160,7 @@ class CN3S:
 
     """
 
-    def __init__(self, params: CN3SParams) -> None:
+    def __init__(self, params: CN3SParams, freq: FREQ) -> None:
         """
         Store calibration parameters for later use in each computation step.
 
@@ -167,6 +169,7 @@ class CN3S:
 
         """
         self.params = params
+        self.freq = freq
 
         # Init results dataframe
         self.results = pd.DataFrame()
@@ -362,7 +365,8 @@ class CN3S:
         area_m2 = self.params.area * 1e6
 
         # Convert depth: mm → m, scale by area, divide by seconds in a 30-day month
-        seconds_per_month = 24.0 * 3600.0
+        days = 30 if self.freq == "M" else 1
+        seconds_per_month = days * 24.0 * 3600.0
         q_m3s = (q_mm / 1000.0) * area_m2 / seconds_per_month
 
         return q_m3s
