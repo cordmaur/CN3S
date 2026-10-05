@@ -166,6 +166,7 @@ class CN3S:
 
         Args:
             params: Basin and model calibration parameters.
+            freq: Daily or monthly time step.
 
         """
         self.params = params
@@ -451,7 +452,8 @@ class CN3S:
         Run the model over a full time series of precipitation values.
 
         The series index is used to assign ``self.results.index`` after the run,
-        shifted forward by ``params.act`` days (Average Concentration Time). The
+        shifted forward by ``params.act`` days for daily runs (Average
+        Concentration Time). Monthly runs require ``act=0``. The
         first ``params.warmup_steps`` entries are consumed as warm-up and excluded
         from the results.
 
@@ -474,7 +476,11 @@ class CN3S:
             )
             raise ValueError(msg)
 
-        act_delta = pd.Timedelta(days=self.params.act)
+        if self.freq == "D":
+            act_delta = pd.Timedelta(days=self.params.act)
+        else:
+            act_delta = pd.DateOffset(months=self.params.act)
+
         dated_index: pd.DatetimeIndex = prec_series.index + act_delta  # type: ignore[assignment]
         values = prec_series.tolist()
 
@@ -544,11 +550,11 @@ class CN3S:
         self,
         *,
         split: int | None = None,
-        q_headroom: float = 1.2,
-        prec_headroom: float = 1.5,
+        q_headroom: float = 2,
+        prec_headroom: float = 2.5,
         title: str = "CN3S: Simulated vs Observed",
         show: bool = False,
-        height: int = 500,
+        height: int = 700,
         width: int = 1000,
     ) -> Figure:
         """

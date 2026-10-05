@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from time import perf_counter
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
     from plotly.graph_objs import Figure
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from scipy.optimize import OptimizeResult, differential_evolution
+from scipy.optimize import OptimizeResult, differential_evolution, minimize
 
+from cn3s.artifacts import read_json, write_json
 from cn3s.metrics import compute_nse_from_frame
 from cn3s.model import CN3S, CN3SParams
 from cn3s.objectives import Objective, Objectives
+
+
+class _PolishBudgetError(RuntimeError):
+    """Stop local refinement before evaluating beyond its explicit budget."""
 
 
 class CN3SOptimizer:
@@ -29,11 +38,10 @@ class CN3SOptimizer:
     A callback is invoked after every generation to report progress and store
     a tabular history of the current best candidate.
 
-    The optimiser mutates :attr:`model` in place throughout calibration — the
-    model passed at construction is used both for objective evaluations and as the
-    final result container.  Interrupting the run (``KeyboardInterrupt``) is safe:
-    the ``finally`` block guarantees :attr:`model` always holds a fully-run model
-    with the best parameters found so far.
+    The supplied model is reused for candidate evaluations. On completion it is
+    simulated once with the final best parameters. After an interruption, the best
+    completed callback generation is restored when one exists. No result is promised
+    before the first generation or if final simulation itself is interrupted.
 
     Typical usage::
 
@@ -52,8 +60,8 @@ class CN3SOptimizer:
 
     Attributes:
         model: The :class:`~cn3s.model.CN3S` instance being calibrated.
-            After at least one callback generation its parameters reflect the
-            best candidate reported so far by SciPy.
+            After finalization its parameters reflect the saved best solution;
+            during evolution it may contain the most recently evaluated candidate.
         train_ratio: Fraction of the aligned record used for calibration.
 
     """
@@ -79,8 +87,8 @@ class CN3SOptimizer:
         observed_q: pd.Series,
         model: CN3S,
         train_ratio: float = 0.7,
-        max_act: int = 30,
-        objective: str | Objective | None = None,
+        max_act: int | None = None,
+        objective: str | Objective | Callable[[pd.DataFrame], float] | None = None,
     ) -> None:
         """
         Initialise the optimiser and prepare train / test splits.
@@ -93,22 +101,30 @@ class CN3SOptimizer:
                 instance is mutated in place during optimisation.
             train_ratio: Fraction of the aligned record used for calibration.
                 Must be in (0, 1). Defaults to 0.7 (70 / 30 split).
-            max_act: Upper bound (in days) for the Average Concentration Time
-                parameter search.  Must be a non-negative integer.  Increase
-                this for large basins with long travel times.  Defaults to 30.
+            max_act: Upper bound (in days) for the daily Average Concentration
+                Time search. Defaults to 30 for daily models and zero for
+                monthly models. Monthly calibration requires zero.
             objective: Objective to minimise.  Accepts an :class:`~cn3s.objectives.Objective`
                 instance, a plain callable (wrapped automatically), or a string
                 (class name matched against built-in objectives). Defaults to
                 :class:`~cn3s.objectives.NSETopBlend`.
 
         """
+        self.model = model
         # Validate and store input parameters
-        self._validate_and_assign_inputs(train_ratio, max_act)
+        effective_max_act = max_act
+        self._validate_and_assign_inputs(train_ratio, effective_max_act)
 
         # Store inputs and prepare for calibration
-        self.model = model  # The main model
         self.history = pd.DataFrame()
         self.result: OptimizeResult | None = None
+        self._final_frame = pd.DataFrame()
+        self._best_callback: OptimizeResult | None = None
+        self.recovery_path: Path | None = None
+        self.timings: dict[str, float] = {}
+        self.diagnostics: dict[str, Any] = {}
+        self.interrupted = False
+        self.progress = True
 
         # Internal state
         self._area: float = model.params.area  # Basin area
@@ -119,11 +135,10 @@ class CN3SOptimizer:
         self._prec_raw = prec
         self._q_raw = observed_q
 
-        # Build the bounds list, appending the act bound
-        self._bounds_list: list[tuple[float, float]] = [
-            *self._BASE_BOUNDS,
-            (0, int(self._max_act)),  # act: Average Concentration Time (days)
-        ]
+        # Monthly calibration fixes ACT at zero and searches seven parameters.
+        self._bounds_list: list[tuple[float, float]] = list(self._BASE_BOUNDS)
+        if model.freq == "D":
+            self._bounds_list.append((0, int(self._max_act)))
 
         # Align at ACT=0 to determine the reference train/test cutoff date
         self.aligned = pd.concat(
@@ -148,7 +163,7 @@ class CN3SOptimizer:
         self.train_idx = split_idx  # first `split_idx` rows are train (for display)
 
         # Use a date-based cutoff so the split is stable regardless of ACT shift
-        self._train_cutoff: pd.Timestamp = self.aligned.index[split_idx]
+        self._train_cutoff = cast("pd.Timestamp", self.aligned.index[split_idx])
 
     # ------------------------------------------------------------------ #
     # Private helpers
@@ -175,7 +190,7 @@ class CN3SOptimizer:
         self.train_ratio = train_ratio
         self._max_act = max_act
 
-    def _resolve_objective(self, objective: str | Objective | None) -> Objective:
+    def _resolve_objective(self, objective: object) -> Objective:
         """Resolve objective from str name, Objective instance, or None (default)."""
         if objective is None:
             return Objectives.NSETopBlend
@@ -207,8 +222,7 @@ class CN3SOptimizer:
         propagated across the full chronology.
 
         Args:
-            params_vec: Flat array of 8 parameter values in the order expected
-                by :meth:`~cn3s.model.CN3SParams.from_vector`.
+            params_vec: Seven monthly or eight daily candidate values.
 
         Returns:
             DataFrame with columns ``q_m3s`` (modelled) and ``obs_q_m3s``,
@@ -217,7 +231,8 @@ class CN3SOptimizer:
         """
         # Update model parameters
         self.model.params = CN3SParams.from_vector(
-            params_vec,
+            self._full_vector(params_vec),
+            name=self.model.params.name,
             area=self._area,
             warmup_steps=self._warmup_steps,
         )
@@ -227,13 +242,57 @@ class CN3SOptimizer:
         self.model.results = self.model.results.join(
             self._q_raw.rename("obs_q_m3s"),
             how="left",
-        ).dropna()
+        )
 
-        return self.model.results[["q_m3s", "obs_q_m3s"]]
+        return (
+            self.model.results[["q_m3s", "obs_q_m3s"]]
+            .astype(float)
+            .replace(
+                [np.inf, -np.inf],
+                np.nan,
+            )
+            .dropna()
+        )
+
+    def _full_vector(self, params_vec: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """Append the fixed zero ACT to a monthly optimizer candidate."""
+        if self.model.freq == "M" and len(params_vec) == len(self._BASE_BOUNDS):
+            return np.append(params_vec, 0.0)
+        return params_vec
 
     def _select_subset(self, df: pd.DataFrame, *, train: bool) -> pd.DataFrame:
         """Select the train or test subset using the fixed calendar cutoff."""
-        return df.loc[: self._train_cutoff] if train else df.loc[self._train_cutoff :]
+        return cast(
+            "pd.DataFrame",
+            df.loc[df.index < self._train_cutoff]
+            if train
+            else df.loc[df.index >= self._train_cutoff],
+        )
+
+    def evaluate_best(self) -> dict[str, float]:
+        """
+        Evaluate the final SciPy solution on disjoint train and test periods.
+
+        Returns:
+            Final train and test objective and NSE values.
+
+        Raises:
+            ValueError: If optimization has no final result.
+
+        """
+        if self.result is None:
+            msg = "No final optimization result is available"
+            raise ValueError(msg)
+        df = self._final_frame
+        if df.empty:
+            msg = "Final simulation has no paired observations"
+            raise ValueError(msg)
+        return {
+            "train_objective": self._objective_value(df, train=True),
+            "test_objective": self._objective_value(df, train=False),
+            "train_nse": self._nse(df, train=True),
+            "test_nse": self._nse(df, train=False),
+        }
 
     def _nse_on_subset(self, subset: pd.DataFrame) -> float:
         """Compute NSE on an already-selected subset."""
@@ -283,7 +342,7 @@ class CN3SOptimizer:
     ) -> None:
         """Append or update one optimizer-history row keyed by step."""
         params = CN3SParams.from_vector(
-            params_vec,
+            self._full_vector(params_vec),
             area=self._area,
             warmup_steps=self._warmup_steps,
         )
@@ -402,6 +461,23 @@ class CN3SOptimizer:
         """
         params_vec = np.asarray(intermediate_result.x, dtype=np.float64)
         train_objective = float(intermediate_result.fun)
+        self._best_callback = OptimizeResult(
+            x=params_vec.copy(),
+            fun=train_objective,
+            nit=self.step,
+            nfev=int(intermediate_result.get("nfev", 0)),
+            success=False,
+            message="Interrupted; recovered best completed generation",
+        )
+        if self.recovery_path is not None:
+            recovery = read_json(self.recovery_path)
+            recovery.update(
+                best_params=self._full_vector(params_vec).tolist(),
+                best_objective=train_objective,
+                generation=self.step,
+                recovery_kind="callback_best_restart_not_exact_resume",
+            )
+            write_json(self.recovery_path, recovery)
 
         self.add_history(
             params_vec,
@@ -413,7 +489,10 @@ class CN3SOptimizer:
 
         params_vec = [round(float(p), 2) for p in params_vec]
 
-        print(f"{self.step} - Train objective: {train_objective:.4f} - {params_vec}")
+        if self.progress:
+            print(
+                f"{self.step} - Train objective: {train_objective:.4f} - {params_vec}", flush=True
+            )
         self.step += 1
 
     def _persist_model(self, params_vec: npt.NDArray[np.float64]) -> None:
@@ -427,7 +506,7 @@ class CN3SOptimizer:
             params_vec: Parameter vector to persist.
 
         """
-        self._run_model(params_vec)
+        self._final_frame = self._run_model(params_vec).copy()
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -515,7 +594,7 @@ class CN3SOptimizer:
         )
 
         # Replace the trailing NSE line added by CN3S.plot with a train/test breakdown.
-        current_title: str = fig.layout.title.text  # type: ignore[union-attr]
+        current_title: str = fig.layout.title.text
         nse_line = f"Train NSE = {train_nse:.3f} | Test NSE = {test_nse:.3f}"
         new_title = current_title.rsplit("<br>", 1)[0] + f"<br>{nse_line}"
         fig.update_layout(
@@ -527,31 +606,22 @@ class CN3SOptimizer:
 
         return fig
 
-    def optimize(self, **de_kwargs: Any) -> None:
+    def optimize(  # noqa: PLR0912, PLR0915
+        self,
+        *,
+        progress: bool = True,
+        polish_maxiter: int = 50,
+        polish_maxfun: int = 500,
+        **de_kwargs: Any,
+    ) -> None:
         """
-        Run differential evolution to calibrate CN3S parameters.
+        Run DE, optional budgeted refinement, and one final simulation.
 
-        Keyword arguments are forwarded to
-        :func:`scipy.optimize.differential_evolution` and override the
-        defaults set below.
-
-        The run can be interrupted at any time with ``Ctrl+C``
-        (``KeyboardInterrupt``). On successful completion the final SciPy result
-        is persisted to :attr:`model`; during the run, callback updates keep
-        :attr:`model` aligned with the latest callback-best candidate.
-
-        Default DE settings (override via ``**de_kwargs``):
-
-        * ``seed = 42``
-        * ``maxiter = 100``
-        * ``tol = 1e-3``
-        * ``workers = -1``
-        * ``disp = True``
-
-        Args:
-            **de_kwargs: Additional keyword arguments passed to
-                ``scipy.optimize.differential_evolution``.
-
+        Refinement is an explicit L-BFGS-B phase with integer ACT held fixed.
+        ``polish_maxfun`` is enforced before each local objective evaluation.
+        If exhausted, keep the DE solution and report the refinement budget stop.
+        Callback-best recovery is available after a completed generation, not exact
+        optimizer continuation. A second interrupt during finalization propagates.
         """
         defaults: dict[str, Any] = {
             "seed": 42,
@@ -560,27 +630,146 @@ class CN3SOptimizer:
             "workers": -1,
             "disp": True,
         }
-
         defaults.update(de_kwargs)
-
-        scipy_bounds: Any = self._bounds_list  # scipy accepts list[tuple[float, float]]
+        polish = defaults.pop("polish", True)
+        if not isinstance(polish, bool):
+            msg = "polish must be a bool; refinement uses a separately budgeted L-BFGS-B phase"
+            raise TypeError(msg)
+        if polish_maxiter < 1 or polish_maxfun < 1:
+            msg = "Polishing budgets must be positive"
+            raise ValueError(msg)
+        if polish and defaults.get("constraints"):
+            msg = "Constrained refinement is not supported; use polish=False"
+            raise ValueError(msg)
+        if defaults.get("workers", 1) != 1 or defaults.get("vectorized", False):
+            defaults["updating"] = "deferred"
+        else:
+            defaults.setdefault("updating", "immediate")
+        self.progress = progress
         self.history = pd.DataFrame()
         self.result = None
-
+        self._best_callback = None
+        self._final_frame = pd.DataFrame()
+        self.interrupted = False
+        self.timings = {}
+        self.diagnostics = {
+            "polish_requested": polish,
+            "polish_maxiter": polish_maxiter,
+            "polish_maxfun": polish_maxfun,
+            "parameter_bounds": self._bounds_list,
+            "effective_de_options": dict(defaults, polish=False),
+        }
+        self.step = 1
+        phase = "evolution"
+        started = perf_counter()
+        if progress:
+            print("Calibration: differential evolution", flush=True)
         try:
-            self.step = 1
             self.result = differential_evolution(
                 func=self._objective,
-                bounds=scipy_bounds,
+                bounds=cast("Any", self._bounds_list),
                 callback=self._callback,
-                integrality=self._INTEGRALITY,
+                integrality=self._INTEGRALITY if self.model.freq == "D" else None,
+                polish=False,
                 **defaults,
             )
-
+            self.timings[phase] = perf_counter() - started
+            self.diagnostics.update(
+                de_nfev=int(self.result.nfev),
+                de_nit=int(self.result.nit),
+                de_message=str(self.result.message),
+                pre_polish_objective=float(self.result.fun),
+            )
+            if polish:
+                phase = "polishing"
+                started = perf_counter()
+                if progress:
+                    print(
+                        f"Calibration: polishing (maxiter={polish_maxiter}, "
+                        f"maxfun={polish_maxfun})",
+                        flush=True,
+                    )
+                self._refine(polish_maxiter, polish_maxfun)
+                self.timings[phase] = perf_counter() - started
         except KeyboardInterrupt:
-            print("\nOptimization interrupted — best model so far is in `optim.model`.")
-
-        finally:
-            # Persist the final SciPy best solution when the optimizer returns one.
+            self.timings[phase] = perf_counter() - started
+            self.interrupted = True
+            if self.result is None:
+                self.result = self._best_callback
             if self.result is not None:
-                self._persist_model(np.asarray(self.result.x, dtype=np.float64))
+                if phase == "polishing":
+                    attempted = self.diagnostics.get("polish_nfev_attempted", 0)
+                    self.result.nfev += attempted
+                    self.diagnostics["polish_interrupted"] = True
+                self.result.success = False
+                self.result.message = f"Interrupted during {phase}; best available result recovered"
+            if progress:
+                print(
+                    f"Calibration interrupted during {phase}; recovering best available result",
+                    flush=True,
+                )
+        if self.result is not None:
+            if progress:
+                print("Calibration: final simulation", flush=True)
+            started = perf_counter()
+            self._persist_model(np.asarray(self.result.x, dtype=np.float64))
+            self.timings["final_simulation"] = perf_counter() - started
+            self.diagnostics.update(
+                post_polish_objective=float(self.result.fun),
+                nfev=int(self.result.nfev),
+                nit=int(self.result.nit),
+                stop_message=str(self.result.message),
+            )
+
+    def _refine(self, maxiter: int, maxfun: int) -> None:
+        """Refine continuous coordinates and retain only a successful improvement."""
+        assert self.result is not None
+        bounds = list(self._bounds_list)
+        if self.model.freq == "D":
+            act = round(self.result.x[-1])
+            bounds[-1] = (act, act)
+        self.diagnostics["polish_nfev_attempted"] = 0
+        try:
+            result = minimize(
+                self._polish_objective,
+                np.asarray(self.result.x).copy(),
+                method="L-BFGS-B",
+                bounds=bounds,
+                options={"maxiter": maxiter, "maxfun": maxfun},
+            )
+        except _PolishBudgetError:
+            count = int(self.diagnostics["polish_nfev_attempted"])
+            self.result.nfev += count
+            self.diagnostics.update(
+                polish_nfev=count,
+                polish_nit=None,
+                polish_accepted=False,
+                polish_message="Hard evaluation budget reached; DE solution retained",
+            )
+            if self.progress:
+                print("Polishing budget reached; keeping the DE solution", flush=True)
+            return
+        accepted = bool(
+            result.success
+            and np.isfinite(result.fun)
+            and result.fun < self.result.fun
+            and all(lo <= v <= hi for v, (lo, hi) in zip(result.x, bounds, strict=False))
+        )
+        self.diagnostics.update(
+            polish_nfev=int(result.nfev),
+            polish_nit=int(result.nit),
+            polish_message=str(result.message),
+            polish_accepted=accepted,
+            polish_candidate_objective=float(result.fun),
+        )
+        self.result.nfev += result.nfev
+        if accepted:
+            self.result.x = result.x
+            self.result.fun = result.fun
+
+    def _polish_objective(self, vector: npt.NDArray[np.float64]) -> float:
+        """Count local evaluations even when refinement is interrupted."""
+        if self.diagnostics["polish_nfev_attempted"] >= self.diagnostics["polish_maxfun"]:
+            raise _PolishBudgetError
+        self.diagnostics["polish_nfev_attempted"] += 1
+        return self._objective(vector)

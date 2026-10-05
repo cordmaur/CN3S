@@ -9,25 +9,41 @@ description = "CN3S rainfall-runoff model (Curve Number with Three-Step Antecede
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
+    "geopandas",
+    "matplotlib",
+    "pandas",
+    "pyarrow",
+    "pyogrio",
+    "scipy",
+    "scikit-learn",
+    "shapely>=2.0",
+    "tqdm",
 ]
 
 [project.optional-dependencies]
+notebook = ["ipywidgets>=8", "ipykernel", "nbclient", "nbformat"]
 dev = [
     "mypy",
     "ruff",
     "pytest",
     "numpy-stubs",
 ]
+workflow = [
+    "azure-identity",
+    "python-dateutil",
+    "pyodbc",
+    "sqlalchemy",
+]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cn3s"]
+packages = ["src/cn3s", "src/hydro", "src/hydrography", "src/utils"]
 
 [tool.ruff]
 line-length = 100
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["C901", "ANN401", "RET504", "EXE002", "T201", "D203", "D212", "TRY300", "BLE001", "S608", "S101", "PLR0913", "S301"]
+ignore = ["C901", "ANN401", "RET504", "EXE002", "T201", "D203", "D212", "TRY300", "BLE001", "S608", "S101", "PLR0913", "S301", "COM812"]
 
 [tool.mypy]
 files = [
@@ -35,7 +51,6 @@ files = [
 ]
 strict = true
 local_partial_types = true
-strict_equality_for_none = true
 warn_unreachable = true
 follow_imports = "skip"
 ignore_missing_imports = true

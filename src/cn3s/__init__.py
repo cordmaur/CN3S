@@ -11,8 +11,25 @@ References:
 
 """
 
+from __future__ import annotations
+
+from cn3s.artifacts import CalibrationStore
+from cn3s.evaluation import CalibrationEvaluation
 from cn3s.model import CN3S, CN3SParams
 from cn3s.objectives import Objective, Objectives
 from cn3s.optim import CN3SOptimizer
+from cn3s.playground import ModelPlayground
+from cn3s.workflow import HydroDischargeSource, StationCalibrationWorkflow
 
-__all__ = ["CN3S", "CN3SOptimizer", "CN3SParams", "Objective", "Objectives"]
+__all__ = [
+    "CN3S",
+    "CN3SOptimizer",
+    "CN3SParams",
+    "CalibrationEvaluation",
+    "CalibrationStore",
+    "HydroDischargeSource",
+    "ModelPlayground",
+    "Objective",
+    "Objectives",
+    "StationCalibrationWorkflow",
+]
