@@ -26,6 +26,12 @@ pyproject.toml    # Build config; install with: pip install -e .
 - `ruff` for linting and formatting (line length 100, enforced via `.vscode/settings.json`)
 - `mypy` for static type checking in strict mode
 - Google-style docstrings with `Args:` and `Returns:` sections
+- Every method, including properties and special methods, must have a Google-style
+  docstring. Document arguments and return values where applicable, with units and
+  scientific assumptions when relevant. Keep multiline docstring formatting consistent.
+- Code must include concise comments explaining scientific processing steps,
+  methodological decisions, and non-obvious behavior. Explain purpose and assumptions;
+  avoid comments that merely restate Python syntax.
 
 ### Model Implementation (`src/cn3s/`)
 - All model code lives in `model.py`; `__init__.py` only re-exports `CN3S` and `CN3SParams`
@@ -40,6 +46,8 @@ pyproject.toml    # Build config; install with: pip install -e .
 - Notebooks are numbered and prefixed: `01-`, `02-`, etc.
 - Always load with `%autoreload 2` and `%load_ext autoreload`
 - Import the package as `from cn3s import CN3S, CN3SParams`
+- User-configured constants in notebooks must use uppercase names with underscores
+  (e.g., `STATION_CODE`, `STATIONS_DIR`, `WATERSHEDS_PATH`).
 
 ## Dev Container
 - Image: `cordmaur/planetary:v5`
@@ -59,7 +67,7 @@ The following guidelines govern research work in this repository alongside the C
 conventions above. Preserve the existing `CN3S` and `CN3SParams` design; the preference
 for functions applies to new code and does not require refactoring those classes.
 Keep type annotations on all function signatures, using simple types, and retain
-Google-style docstrings for meaningful functions without unnecessary boilerplate.
+Google-style docstrings on every method and on meaningful functions without unnecessary boilerplate.
 
 This repository contains **research code**, not production software.
 
@@ -327,3 +335,16 @@ The default philosophy of this repository is:
 > **Simple, explicit, documented research code is preferred over robust, generalized production architecture.**
 
 When a more complex solution genuinely appears necessary, explain why and ask before introducing it.
+
+
+## Iteration records
+
+Save each distinct work iteration's plan and session record under
+`agents/iterations/<description>_YYYY-MM-DD_HH-MM-SS/plan.md`.
+Use America/Sao_Paulo local time for the directory's creation timestamp.
+During discussion of the same iteration, overwrite its existing plan.md in place.
+Do not version plans: do not add version numbers to filenames, directory names,
+or plan titles, and do not keep revision copies or create a new timestamped
+folder for each discussion update. Create a new folder only for a distinct work
+iteration. Do not place plan.md at the repository root. Include proposed
+method-call examples at the end of plans.

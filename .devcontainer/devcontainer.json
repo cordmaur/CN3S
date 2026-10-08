@@ -6,7 +6,7 @@
     "mounts": [
         // Bind-mount a local data folder into the container.
         // Set CN3S_DATA_FOLDER on the host to the path of your data directory.
-        "source=E:/OneDrive/OneDrive - Agência Nacional de Águas/data,target=/data,type=bind"
+        "source=/mnt/e/OneDrive/OneDrive - Agência Nacional de Águas/data,target=/data,type=bind"
     ],
     "runArgs": [
         "--memory=16g",

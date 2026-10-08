@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING, Any, cast
+from dataclasses import fields
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
 from cn3s.metrics import compute_nse
+
+# Keep the old module name resolvable when reading saved parameter pickles.
+from cn3s.params import CN3SParams  # noqa: TC001
 
 try:
     import plotly.graph_objects as go
@@ -22,116 +25,6 @@ if TYPE_CHECKING:
     from plotly.graph_objs import Figure
 
     from utils import FREQ
-
-
-@dataclass
-class CN3SParams:
-    """
-    Parameters for the CN3S rainfall-runoff model.
-
-    Stores both basin descriptors and the six calibration parameters.
-    All numeric fields default to values calibrated for the Porto Uruaçu basin.
-    """
-
-    name: str = "Unnamed"
-    """"Basin name (used for labeling plots and outputs)."""
-
-    area: float = 34334.0
-    """Drainage area in km²."""
-
-    r0: float = 350.0
-    """Initial groundwater storage in mm (used as R at t=0)."""
-
-    cn_i: float = 7.35
-    """Curve Number calibration anchor (CN-I, dry antecedent condition)."""
-
-    alfa: float = 0.2
-    """Initial abstraction ratio — fraction of S withheld before runoff starts."""
-
-    beta: float = 0.00211662329536844
-    """Antecedent precipitation sensitivity parameter (Eq. 04)."""
-
-    k0: float = 1.0
-    """Exponential decay factor for older antecedent precipitation months."""
-
-    k1: float = 0.316
-    """Groundwater recharge fraction of net rainfall (K1 < 1, Eq. 11)."""
-
-    k2: float = 0.305
-    """Baseflow recession coefficient (fraction of R released per step, Eq. 12)."""
-
-    act: int = 0
-    """Average Concentration Time — days of lag between precipitation and discharge.
-
-    Shifts the precipitation index forward by this many days before aligning with
-    observed discharge. Must be a non-negative integer. Only applied when
-    :meth:`CN3S.run` receives a :class:`pandas.Series` (index-aware mode).
-    """
-
-    warmup_steps: int = 3
-    """Number of antecedent precipitation steps used by :meth:`CN3S.vj`.
-
-    Also defines the burn-in length excluded from `results` indexing in
-    :meth:`CN3S.run`.
-    """
-
-    @classmethod
-    def from_vector(
-        cls,
-        vector: Iterable[float],
-        **kwargs: Any,
-    ) -> CN3SParams:
-        """
-        Create a CN3SParams instance from a flat vector of optimizable parameters.
-
-        The vector must contain exactly 8 values in the order:
-        ``[r0, cn_i, alfa, beta, k0, k1, k2, act]``.
-        Basin name and drainage area are fixed descriptors passed separately.
-        ``act`` is rounded to the nearest integer.
-
-        Args:
-            vector: Iterable of 8 floats — ``[r0, cn_i, alfa, beta, k0, k1, k2, act]``.
-            **kwargs: Additional keyword arguments passed to the CN3SParams constructor.
-
-        Returns:
-            CN3SParams instance with the given parameter values.
-
-        """
-        r0, cn_i, alfa, beta, k0, k1, k2, act = vector
-        return cls(
-            **kwargs,
-            r0=r0,
-            cn_i=cn_i,
-            alfa=alfa,
-            beta=beta,
-            k0=k0,
-            k1=k1,
-            k2=k2,
-            act=round(act),
-        )
-
-    def as_list(self) -> list[float]:
-        """
-        Return the optimizable parameters as a flat vector.
-
-        The order of values is: ``[r0, cn_i, alfa, beta, k0, k1, k2, act]``.
-
-        Returns:
-            List of 8 values corresponding to the optimizable parameters.
-            Note: ``act`` is an :class:`int` but is included as-is for compatibility
-            with scipy optimizers (which treat all values as floats).
-
-        """
-        return [
-            self.r0,
-            self.cn_i,
-            self.alfa,
-            self.beta,
-            self.k0,
-            self.k1,
-            self.k2,
-            float(self.act),
-        ]
 
 
 class CN3S:
@@ -166,6 +59,7 @@ class CN3S:
 
         Args:
             params: Basin and model calibration parameters.
+            freq: Time-step frequency: "D" for daily or "M" for monthly inputs.
 
         """
         self.params = params
@@ -474,7 +368,11 @@ class CN3S:
             )
             raise ValueError(msg)
 
-        act_delta = pd.Timedelta(days=self.params.act)
+        if self.freq == "D":
+            act_delta = pd.Timedelta(days=self.params.act)
+        else:
+            act_delta = pd.DateOffset(months=self.params.act)
+
         dated_index: pd.DatetimeIndex = prec_series.index + act_delta  # type: ignore[assignment]
         values = prec_series.tolist()
 
@@ -496,6 +394,9 @@ class CN3S:
             self.step(prec)
 
         self.results.index = dated_index[warmup_steps:]
+
+        # In the end, shift back the precipitation series by the act period
+        self.results["prec"] = self.results["prec"].shift(-self.params.act)
 
     def evaluate(self, obs_q: pd.Series) -> float:
         """
@@ -544,8 +445,8 @@ class CN3S:
         self,
         *,
         split: int | None = None,
-        q_headroom: float = 1.2,
-        prec_headroom: float = 1.5,
+        q_headroom: float = 1.8,
+        prec_headroom: float = 2.3,
         title: str = "CN3S: Simulated vs Observed",
         show: bool = False,
         height: int = 500,
@@ -611,6 +512,7 @@ class CN3S:
             + ", ".join(
                 f"{field.name}={_fmt_param_value(getattr(self.params, field.name))}"
                 for field in fields(self.params)
+                if field.repr
             )
             + ")"
         )

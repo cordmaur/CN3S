@@ -14,11 +14,13 @@ from azure.identity import DeviceCodeCredential
 from sqlalchemy import create_engine, inspect, text
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from sqlalchemy.engine.base import Engine
 
 logger = logging.getLogger(__name__)
 
-type Param = dict[str, str]
+Param = dict[str, str]
 
 
 class SqlConnector:
@@ -252,6 +254,7 @@ class SqlConnector:
         self,
         query: str,
         *,
+        params: Mapping[str, Any] | None = None,
         parse_dates: list[str] | None = None,
         dtype: dict[str, str] | None = None,
         max_attempts: int = 5,
@@ -264,6 +267,7 @@ class SqlConnector:
 
         Args:
             query (str): SQL query to execute.
+            params: Bound SQL query parameters.
             parse_dates (list[str] | None): Columns to parse as dates.
             dtype (dict[str, str] | None): Column dtype mapping for pandas.
             max_attempts (int): Maximum number of read attempts.
@@ -279,14 +283,15 @@ class SqlConnector:
         last_exception = None
 
         for attempt in range(max_attempts):
-            connection = self.engine.connect()
-            if stream_results:
-                connection = connection.execution_options(stream_results=True)
-
+            connection = None
             try:
+                connection = self.engine.connect()
+                if stream_results:
+                    connection = connection.execution_options(stream_results=True)
                 data = pd.read_sql(
-                    query,
+                    text(query) if params is not None else query,
                     connection,
+                    params=params,
                     parse_dates=parse_dates,
                     dtype=dtype,
                 )
@@ -301,11 +306,13 @@ class SqlConnector:
                 if attempt == max_attempts - 1:
                     break
 
-                connection.invalidate()
+                if connection is not None:
+                    connection.invalidate()
                 time.sleep(retry_sleep_seconds * (attempt + 1))
 
             finally:
-                connection.close()
+                if connection is not None:
+                    connection.close()
 
         if data is None:
             msg = failure_message or f"Failed to retrieve data after {max_attempts} attempts"

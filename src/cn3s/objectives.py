@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 from cn3s.metrics import compute_nse_from_frame
@@ -107,8 +108,108 @@ class NSETopBlend(Objective):
         return 0.5 * (1 - nse) + 0.5 * (1 - nse_top)
 
 
+class ExtremeFlowBlend(Objective):
+    """Weighted relative squared errors for observed low, middle, and high flows."""
+
+    def __init__(
+        self,
+        low_quantile: float = 0.2,
+        high_quantile: float = 0.9,
+        weights: tuple[float, float, float] = (0.4, 0.2, 0.4),
+        discharge_floor: float = 0.01,
+        reference_observed: pd.Series | None = None,
+    ) -> None:
+        """
+        Configure flow groups, their priorities, and discharge normalization.
+
+        Args:
+            low_quantile: Observed non-exceedance quantile defining low flows.
+            high_quantile: Observed non-exceedance quantile defining high flows.
+            weights: Nonnegative weights in low, middle, high order. Active
+                weights are normalized to sum to one when evaluating.
+            discharge_floor: Positive minimum normalization scale in m³/s.
+                The default is a numerical starting value; select a meaningful
+                basin-specific scale when zero or near-zero flows occur.
+            reference_observed: Optional calibration discharge series in m³/s
+                used to fix thresholds and normalization scales across evaluations.
+                Otherwise, each evaluated subset supplies its own reference.
+
+        Raises:
+            ValueError: If quantiles, weights, the floor, or the reference are invalid.
+
+        """
+        super().__init__()
+        if not 0 < low_quantile < high_quantile < 1:
+            msg = "Quantiles must satisfy 0 < low_quantile < high_quantile < 1."
+            raise ValueError(msg)
+        if any(not math.isfinite(w) or w < 0 for w in weights) or sum(weights) <= 0:
+            msg = "Weights must be finite, nonnegative, and have a positive sum."
+            raise ValueError(msg)
+        if not math.isfinite(discharge_floor) or discharge_floor <= 0:
+            msg = "discharge_floor must be finite and positive (m³/s)."
+            raise ValueError(msg)
+
+        self.low_quantile = low_quantile
+        self.high_quantile = high_quantile
+        self.weights = weights
+        self.discharge_floor = discharge_floor
+        self.reference_observed = (
+            reference_observed.dropna().copy() if reference_observed is not None else None
+        )
+        if self.reference_observed is not None and self.reference_observed.empty:
+            msg = "reference_observed must contain at least one discharge observation."
+            raise ValueError(msg)
+
+    def evaluate(self, df: pd.DataFrame) -> float:
+        """
+        Compute a dimensionless loss with zero indicating a perfect fit.
+
+        Errors remain paired by date. Each group's mean squared error is divided
+        by its reference mean discharge squared, bounded below by the floor squared.
+        This emphasizes relative errors without dividing by narrow tail variances.
+
+        Args:
+            df: Aligned, non-missing observations and simulations in m³/s,
+                in columns ``obs_q_m3s`` and ``q_m3s``.
+
+        Returns:
+            Weighted normalized squared error, or infinity if no positively
+            weighted group has observations. Empty groups are omitted.
+
+        """
+        observed = df["obs_q_m3s"]
+        simulated = df["q_m3s"]
+        reference = self.reference_observed if self.reference_observed is not None else observed
+        low = float(reference.quantile(self.low_quantile))
+        high = float(reference.quantile(self.high_quantile))
+
+        # Low-flow membership takes precedence when tied quantiles coincide.
+        groups = (
+            (observed <= low, reference <= low),
+            ((observed > low) & (observed < high), (reference > low) & (reference < high)),
+            ((observed >= high) & (observed > low), (reference >= high) & (reference > low)),
+        )
+        loss = 0.0
+        active_weight = 0.0
+        for weight, (mask, reference_mask) in zip(self.weights, groups, strict=True):
+            if weight == 0 or not mask.any():
+                continue
+            reference_group = reference[reference_mask]
+            # A regime absent from the calibration reference uses the discharge floor.
+            scale = self.discharge_floor
+            if not reference_group.empty:
+                scale = max(float(reference_group.mean()), scale)
+            squared_relative_errors = ((simulated[mask] - observed[mask]) / scale) ** 2
+            loss += weight * float(squared_relative_errors.mean())
+            active_weight += weight
+
+        # Tied or short records may lack a regime; retain the remaining priorities.
+        return loss / active_weight if active_weight > 0 else math.inf
+
+
 class Objectives:
     """Namespace of ready-to-use objective instances."""
 
     PlainNSE: Objective = PlainNSE()
     NSETopBlend: Objective = NSETopBlend()
+    ExtremeFlowBlend: Objective = ExtremeFlowBlend()
