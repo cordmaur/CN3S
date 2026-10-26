@@ -218,3 +218,6 @@ __marimo__/
 .streamlit/secrets.toml
 
 data/
+
+# Shared Azure SQL login (account record and token cache)
+/.azure-auth/

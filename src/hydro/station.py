@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
+from math import isfinite
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, TypeAlias
 
@@ -55,6 +57,8 @@ class Station:
         # Both providers borrow the caller's connector; Station does not own it.
         self.hidro = Hidro(connector)
         self.telemetria = Telemetria(self.hidro.connector)
+        self.stats: pd.DataFrame | None = None
+
         try:
             self.info = self.hidro.get_station_info(self.code)
         except Exception:
@@ -211,46 +215,133 @@ class Station:
         """
         Download and save basin rainfall independently of hydrological observations.
 
-        MERGE monthly totals are averaged over clipped cells without area weighting.
-        Normalize labels to month start and reject missing rainfall months so the
-        saved series represents consecutive model steps.
+        MERGE totals are averaged over clipped cells without area weighting.
+        Daily grids are processed individually and their basin means cached as
+        text in Daily/rain_cache. Cached means are reused even if the downloader
+        is configured to update raw files; remove the cache to refresh rainfall.
+        A changed basin geometry or CRS uses a separate cache directory.
+        Monthly labels are normalized to month start. Both frequencies require
+        finite rainfall for every requested model step.
 
         Args:
             downloader: MERGE downloader configured with its local download folder.
-            freq: M for monthly; D is recognized but not implemented.
+            freq: M for monthly totals or D for daily totals, in mm.
             start: Inclusive first date of the requested rainfall window.
             end: Inclusive last date of the requested rainfall window.
 
         Raises:
-            NotImplementedError: If daily downloading is requested.
-            ValueError: If frequency is unsupported or monthly rainfall is missing.
+            ValueError: If frequency or dates are invalid, or rainfall is missing/nonfinite.
+            FileNotFoundError: If a requested daily rainfall file is unavailable.
 
         """
-        if freq == "D":
-            msg = "Daily rainfall downloading is not implemented."
-            raise NotImplementedError(msg)
-        if freq != "M":
+        if freq not in ("M", "D"):
             msg = "Frequency must be 'M' or 'D'."
             raise ValueError(msg)
 
         from mergedownloader.inpeparser import InpeTypes  # noqa: PLC0415
         from mergedownloader.utils import GISUtil  # noqa: PLC0415
 
-        cube = downloader.create_cube(start, end, InpeTypes.MONTHLY_ACCUM_YEARLY)
-        clipped = GISUtil.cut_cube_by_geoms(cube, self.upstream_watershed.geometry)
-        # MERGE already contains monthly totals; only their labels need normalization.
-        rain = clipped.mean(dim=["latitude", "longitude"]).to_series()
-        rain.index = pd.DatetimeIndex(rain.index).to_period("M").to_timestamp()
-        first_month = pd.Timestamp(start).to_period("M").to_timestamp()
-        months = pd.date_range(first_month, end, freq="MS", name="date")
-        rain = rain.reindex(months)
-        if rain.isna().any():
-            msg = "Monthly rainfall is missing; choose a continuous rainfall window."
+        first = pd.Timestamp(start)
+        last = pd.Timestamp(end)
+        if pd.isna(first) or pd.isna(last) or first > last:
+            msg = "Rainfall dates must be valid and start must not be after end."
+            raise ValueError(msg)
+        first_date = pd.Timestamp(start).to_period(freq).to_timestamp()
+        dates = pd.date_range(first_date, last, freq="MS" if freq == "M" else "D", name="date")
+
+        if freq == "D":
+            rain = self._download_daily_rain(downloader, dates)
+        else:
+            print("Creating cube: ", pd.Timestamp.now())
+            cube = downloader.create_cube(start, end, InpeTypes.MONTHLY_ACCUM_YEARLY)
+            print("Cuting cube: ", pd.Timestamp.now())
+            clipped = GISUtil.cut_cube_by_geoms(cube, self.upstream_watershed.geometry)
+            # MERGE already contains monthly totals; only their labels need normalization.
+            rain = clipped.mean(dim=["latitude", "longitude"]).to_series()
+            rain.index = pd.DatetimeIndex(rain.index).to_period(freq).to_timestamp()
+
+        rain = rain.reindex(dates)
+        missing = rain.index[~rain.map(isfinite)]
+        if not missing.empty:
+            missing_dates = missing.strftime("%Y-%m-%d").tolist()
+            msg = f"Missing or nonfinite basin rainfall for {missing_dates}."
             raise ValueError(msg)
 
-        for folder in ("Monthly", "Daily"):
-            (self.station_dir / folder).mkdir(parents=True, exist_ok=True)
-        rain.to_frame("prec_mm").to_parquet(self.station_dir / "Monthly" / "rain.parquet")
+        print("Saving rain series to disk: ", pd.Timestamp.now())
+        folder = "Monthly" if freq == "M" else "Daily"
+
+        (self.station_dir / folder).mkdir(parents=True, exist_ok=True)
+
+        rain.to_frame("prec_mm").to_parquet(self.station_dir / folder / "rain.parquet")
+        print("Rain series saved to disk: ", pd.Timestamp.now())
+
+    def _download_daily_rain(
+        self,
+        downloader: Downloader,
+        dates: pd.DatetimeIndex,
+    ) -> pd.Series:
+        """
+        Read or compute one basin mean at a time without retaining daily grids.
+
+        Args:
+            downloader: MERGE downloader providing raw-file disk caching and its parser.
+            dates: Requested calendar days, including leap days.
+
+        Returns:
+            Daily basin precipitation in mm, using the existing unweighted cell mean.
+            MERGE kg/m² totals are equivalent to mm of liquid water.
+
+        Raises:
+            FileNotFoundError: If a daily source is unavailable.
+            ValueError: If a cached or computed basin mean is nonfinite.
+
+        """
+        import xarray as xr  # noqa: PLC0415
+        from mergedownloader.inpeparser import InpeTypes  # noqa: PLC0415
+        from mergedownloader.utils import GISUtil  # noqa: PLC0415
+
+        geometries = self.upstream_watershed.geometry
+        # Cache identity includes the scientific method, units, basin geometry, and CRS.
+        # Change the method tag if the clipping or averaging convention changes.
+        identity = "MERGE_DAILY_RAIN|mm|polygon_clip_unweighted_mean_v1|" + str(geometries.crs)
+        signature = sha256(identity.encode("utf-8"))
+        for geometry in geometries:
+            signature.update(geometry.wkb)
+        cache_dir = self.station_dir / "Daily" / "rain_cache" / signature.hexdigest()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        parser = downloader.get_parser(InpeTypes.DAILY_RAIN)
+        values: list[float] = []
+
+        print("Reading or computing daily basin rainfall: ", pd.Timestamp.now())
+        for date in dates:
+            day = date.strftime("%Y-%m-%d")
+            cache_path = cache_dir / f"{day}.txt"
+            if cache_path.exists():
+                value = float(cache_path.read_text(encoding="utf-8").strip())
+            else:
+                path = downloader.get_file(day, InpeTypes.DAILY_RAIN)
+                if path is None:
+                    msg = f"Daily MERGE rainfall is unavailable for {day}."
+                    raise FileNotFoundError(msg)
+                # Avoid open_file/create_cube: their LRU caches retain spatial arrays.
+                with xr.open_dataset(path, drop_variables=["step"], cache=False) as dataset:
+                    prepared = parser.post_proc(dataset)
+                    grid = prepared[parser.constants["var"]]
+                    clipped = GISUtil.cut_cube_by_geoms(grid, geometries)
+                    value = float(clipped.mean(dim=["latitude", "longitude"]).item())
+                    del clipped, grid, prepared
+
+            if not isfinite(value):
+                msg = f"Nonfinite basin rainfall for {day}; cache file: {cache_path}."
+                raise ValueError(msg)
+            if not cache_path.exists():
+                # Publish only a complete finite value; interrupted writes are never reused.
+                temporary_path = cache_path.with_suffix(".tmp")
+                temporary_path.write_text(f"{value!r}\n", encoding="utf-8")
+                temporary_path.replace(cache_path)
+            values.append(value)
+
+        return pd.Series(values, index=dates, name="prec_mm", dtype="float64")
 
     def download_discharge(
         self,
@@ -278,10 +369,7 @@ class Station:
             ValueError: If frequency is unsupported.
 
         """
-        if freq == "D":
-            msg = "Daily discharge downloading is not implemented."
-            raise NotImplementedError(msg)
-        if freq != "M":
+        if freq not in ("M", "D"):
             msg = "Frequency must be 'M' or 'D'."
             raise ValueError(msg)
 
@@ -290,12 +378,19 @@ class Station:
         self.telemetria = Telemetria(conn)
         self.load_series(start=start, end=end)
         discharge = self.get_series(series_type="vazao", period=slice(start, end))["val"]
-        monthly_q = discharge.resample("MS").mean().rename_axis("date")
 
-        for folder in ("Monthly", "Daily"):
-            (self.station_dir / folder).mkdir(parents=True, exist_ok=True)
-        monthly_q.to_frame("q_m3s").to_parquet(
-            self.station_dir / "Monthly" / "discharge.parquet",
+        if freq == "M":
+            discharge = discharge.resample("MS").mean().rename_axis("date")
+            folder = "Monthly"
+        else:
+            folder = "Daily"
+
+        # Create the folder
+        (self.station_dir / folder).mkdir(parents=True, exist_ok=True)
+
+        # Save discharge to disk
+        discharge.to_frame("q_m3s").to_parquet(
+            self.station_dir / folder / "discharge.parquet",
         )
 
     def load_series(self, *, start: str | None = None, end: str | None = None) -> None:

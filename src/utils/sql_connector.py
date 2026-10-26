@@ -5,12 +5,18 @@ from __future__ import annotations
 import logging
 import struct
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import pyodbc
 from azure.core.exceptions import ClientAuthenticationError
-from azure.identity import DeviceCodeCredential
+from azure.identity import (
+    AuthenticationRecord,
+    AuthenticationRequiredError,
+    DeviceCodeCredential,
+    TokenCachePersistenceOptions,
+)
 from sqlalchemy import create_engine, inspect, text
 
 if TYPE_CHECKING:
@@ -23,6 +29,23 @@ logger = logging.getLogger(__name__)
 Param = dict[str, str]
 
 
+def _log_unexpected_authentication_errors(record: logging.LogRecord) -> bool:
+    """
+    Omit the SDK warning for an expected device-login request during a cache probe.
+
+    Args:
+        record: Azure Identity log message, whose arguments include the exception.
+
+    Returns:
+        Whether to retain the message; actual authentication failures remain visible.
+
+    """
+    return not (
+        isinstance(record.args, tuple)
+        and any(isinstance(arg, AuthenticationRequiredError) for arg in record.args)
+    )
+
+
 class SqlConnector:
     """
     A SQLAlchemy connector for Azure SQL-like databases.
@@ -30,8 +53,8 @@ class SqlConnector:
     e.g., Azure Synapse On-Demand)
     using Azure Active Directory token-based authentication with pyodbc.
 
-    It handles token acquisition and refresh through a provided Azure Identity credential
-    object and manages SQLAlchemy engine and connection pooling.
+    It restores a shared user login from the project .azure-auth directory and
+    manages token refresh, the SQLAlchemy engine, and connection pooling.
     """
 
     SERVER = "synanaprod001-ondemand.sql.azuresynapse.net"
@@ -42,6 +65,8 @@ class SqlConnector:
     DEFAULT_POOL_TIMEOUT_SECONDS = 60
     # Azure SQL/Synapse token scope
     TOKEN_SCOPE = "https://database.windows.net/.default"  # noqa: S105
+    # Resolve from the source file so every notebook uses the same account and cache.
+    AUTH_DIR = Path(__file__).resolve().parents[2] / ".azure-auth"
 
     CONNECTION_STRING = """Driver={ODBC Driver 18 for SQL Server};
     Server=synanaprod001-ondemand.sql.azuresynapse.net;
@@ -60,12 +85,6 @@ class SqlConnector:
         Initialize the SqlConnector.
 
         Args:
-            odbc_connection_string (str): The DSN-less ODBC connection string.
-                Example: "Driver={ODBC Driver 18 for SQL Server};
-                Server=your-synapse-ondemand.sql.azuresynapse.net;Database=your_db;Encrypt=yes;TrustServerCertificate=no;"
-                Ensure it does NOT contain UID/PWD or AccessToken parameters.
-            credential (TokenCredential): An Azure Identity credential object
-                (e.g., DeviceCodeCredential, ClientSecretCredential, ManagedIdentityCredential).
             pool_recycle (int): Number of seconds after which a connection is recycled.
                 Should be less than the access token lifetime. Defaults to 1800 (30 mins).
             pool_size (int): Number of connections to keep open in the connection pool.
@@ -73,15 +92,11 @@ class SqlConnector:
             max_overflow (int): Number of extra connections allowed beyond pool_size.
             Defaults to 10.
             pool_timeout (int): Seconds to wait before giving up on getting a connection from the
-            pool. Defaults to 30.
-            sqlalchemy_echo (bool): If True, SQLAlchemy engine will log all statements.
-            Defaults to False.
-            sqlalchemy_echo_pool (Union[bool, str]): If True or "debug", SQLAlchemy pool will log
-            checkouts/checkins. Defaults to False.
+            pool. Defaults to 60.
 
         """
         self.odbc_connection_string = SqlConnector.CONNECTION_STRING
-        self.credential = DeviceCodeCredential()
+        self.credential = self._create_credential()
         self.pool_recycle = pool_recycle
         self.pool_size = pool_size
         self.max_overflow = max_overflow
@@ -90,12 +105,62 @@ class SqlConnector:
         logger.info("Initializing SqlConnector.")
         self.engine: Engine = self._create_sqlalchemy_engine()
 
-        # Just ping the database to start the connection
-        self.execute_query("SELECT 1")
+        # Verify access immediately and release resources if startup authentication fails.
+        try:
+            self.execute_query("SELECT 1")
+        except Exception:
+            self.close()
+            raise
+
+    @classmethod
+    def check_login(cls) -> None:
+        """
+        Verify Azure SQL access before running the rest of a notebook.
+
+        Reuse the shared disk cache or request device sign-in when necessary.
+        Construction executes SELECT 1; release the connection afterward while
+        retaining the disk cache for later connectors and kernel restarts.
+
+        """
+        connector = cls()
+        try:
+            print("Azure SQL login verified.")
+        finally:
+            connector.close()
+
+    @classmethod
+    def _create_credential(cls) -> DeviceCodeCredential:
+        """
+        Restore the shared account and configure persistent Azure token caching.
+
+        Returns:
+            Credential configured for silent SQL token refresh and explicit
+            device sign-in when user interaction is required.
+
+        """
+        cls.AUTH_DIR.mkdir(mode=0o700, exist_ok=True)
+        cls.AUTH_DIR.chmod(0o700)
+        record_path = cls.AUTH_DIR / "account.json"
+        record = (
+            AuthenticationRecord.deserialize(record_path.read_text(encoding="utf-8"))
+            if record_path.exists()
+            else None
+        )
+        # Azure appends its cache suffix to this absolute project-local prefix.
+        # Headless Linux may lack a keyring; the private directory protects its file fallback.
+        cache_options = TokenCachePersistenceOptions(
+            name=str(cls.AUTH_DIR / "tokens"),
+            allow_unencrypted_storage=True,
+        )
+        return DeviceCodeCredential(
+            authentication_record=record,
+            cache_persistence_options=cache_options,
+            disable_automatic_authentication=True,
+        )
 
     def _get_azure_token_struct(self) -> bytes:
         """
-        Acquire an Azure AD access token using the provided credential.
+        Acquire an Azure AD access token using the shared user login.
 
         Additionally, packs it into the structure expected by pyodbc for SQL_COPT_SS_ACCESS_TOKEN.
 
@@ -109,7 +174,21 @@ class SqlConnector:
         """
         try:
             logger.debug("Attempting to get Azure AD token for scope: %s", self.TOKEN_SCOPE)
-            token_object = self.credential.get_token(self.TOKEN_SCOPE)
+            try:
+                # The SDK logs an expected cache miss as a warning, with a traceback in debug mode.
+                credential_logger = logging.getLogger("azure.identity._internal.interactive")
+                credential_logger.addFilter(_log_unexpected_authentication_errors)
+                try:
+                    token_object = self.credential.get_token(self.TOKEN_SCOPE)
+                finally:
+                    credential_logger.removeFilter(_log_unexpected_authentication_errors)
+            except AuthenticationRequiredError as exc:
+                # Save account selection as well as tokens so fresh kernels can reuse the login.
+                record = self.credential.authenticate(scopes=[self.TOKEN_SCOPE], claims=exc.claims)
+                record_path = self.AUTH_DIR / "account.json"
+                record_path.write_text(record.serialize(), encoding="utf-8")
+                record_path.chmod(0o600)
+                token_object = self.credential.get_token(self.TOKEN_SCOPE)
             token_bytes = token_object.token.encode("UTF-16-LE")
             # The token structure for pyodbc:
             #   ULONG   cbAccessToken; // Length of AccessToken in bytes
