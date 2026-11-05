@@ -21,7 +21,7 @@ def load_forecast_grids(
     folder: Path,
     initialization: pd.Timestamp,
     models: list[str],
-    basin: gpd.GeoDataFrame,
+    basin: gpd.GeoDataFrame | None,
 ) -> xr.Dataset:
     """
     Read notebook 03's monthly forecast/hindcast grids for one basin.
@@ -30,7 +30,8 @@ def load_forecast_grids(
         folder: Forecast root containing prec/ and hindcast/ NetCDF files.
         initialization: First day of the CDS initialization month.
         models: Originating centres; the first supplies the reference spatial grid.
-        basin: Upstream polygon geometry with its CRS.
+        basin: Upstream polygon geometry with its CRS, or None to retain the
+            complete downloaded domain for regional visualization.
 
     Returns:
         Dataset with prec and hindcast in the stored 30-day-equivalent mm/month,
@@ -58,7 +59,9 @@ def load_forecast_grids(
         months = (period_ends - pd.Timedelta(days=1)).to_period("M").to_timestamp()
         combined = combined.rename(step="time").assign_coords(time=months)
         combined = combined.rio.write_crs("EPSG:4326")
-        variables[variable] = GISUtil.cut_cube_by_geoms(combined, basin.geometry)
+        variables[variable] = (
+            GISUtil.cut_cube_by_geoms(combined, basin.geometry) if basin is not None else combined
+        )
     # An exact alignment prevents missing leads being introduced by an outer join.
     prec, hindcast = xr.align(variables["prec"], variables["hindcast"], join="exact")
     return xr.Dataset({"prec": prec, "hindcast": hindcast})

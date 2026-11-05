@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="login-wrap" data-login-status="{{ login.status }}">
+<div class="login-card">
+<div class="logo" aria-hidden="true">SHC</div>
+<p class="eyebrow">Sistema Hidrológico da COVEC</p>
+<h1>SHC — Sistema Hidrológico da COVEC</h1>
+<p>Entre com sua conta institucional Microsoft para acessar as ferramentas de análise hidrológica.</p>
+{% if login.status == 'pending' %}
+<div class="code-box">
+<p>Acesse a <a href="{{ login.verification_uri }}" target="_blank" rel="noopener noreferrer">página de entrada da Microsoft</a> e informe o código:</p>
+<div class="device-code">{{ login.user_code }}</div>
+<p>Conclua a entrada na página da Microsoft e volte para cá. A confirmação é automática.</p>
+</div>
+{% elif login.status == 'starting' %}<p role="status">Solicitando um código de entrada à Microsoft…</p>
+{% else %}
+{% if login.status == 'failed' %}<p class="notice">A entrada falhou ou expirou. Tente novamente.</p>{% endif %}
+<form action="{{ url_for('login.start') }}" method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<button>Entrar com a Microsoft</button>
+</form>
+{% endif %}
+{% if login.status in ['starting','pending'] %}
+<form action="{{ url_for('login.logout') }}" method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<button class="quiet">Cancelar entrada</button>
+</form>
+{% endif %}
+<p id="login-error" role="status">
+</p>
+<p class="fineprint">Acesso institucional · as consultas usam suas permissões no banco de dados.</p>
+</div>
+</section>
+{% endblock %}

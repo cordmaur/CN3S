@@ -1,0 +1,20 @@
+name: cn3s-web
+
+services:
+  web:
+    environment:
+      SHC_COOKIE_SECURE: ${SHC_COOKIE_SECURE:-false}
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-}
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    ports:
+      # Test independently of the devcontainer's forwarded port 8000.
+      - "127.0.0.1:18000:8000"
+    volumes:
+      - type: bind
+        source: ${SHC_DURATION_CURVES_HOST_DIR:?Defina SHC_DURATION_CURVES_HOST_DIR com a pasta de curvas no host}
+        target: /data/CN3S/duration_curves
+        bind:
+          create_host_path: false
+    restart: unless-stopped

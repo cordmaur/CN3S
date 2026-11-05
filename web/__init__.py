@@ -1,0 +1,1 @@
+"""SHC web application package."""

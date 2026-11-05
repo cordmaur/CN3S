@@ -1,0 +1,16 @@
+# Only send image inputs, excluding local data and login caches.
+**
+!pyproject.toml
+!src/
+!src/cn3s/
+!src/cn3s/**
+!src/hydro/
+!src/hydro/*.py
+!src/utils/
+!src/utils/*.py
+!web/
+!web/*.py
+!web/templates/
+!web/templates/**
+!web/static/
+!web/static/**

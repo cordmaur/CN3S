@@ -393,41 +393,69 @@ class Station:
             self.station_dir / folder / "discharge.parquet",
         )
 
-    def load_series(self, *, start: str | None = None, end: str | None = None) -> None:
+    def load_series(
+        self,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+        source: Source = "hidro/telemetria",
+        series_type: SeriesType | None = None,
+    ) -> None:
         """
         Load daily observations by station code and calculate quality statistics.
 
         The historical code and each internal telemetric code remain separate in
         series and stats. Statistics describe the requested loading window's records.
+        Each call replaces the previous loaded window. Unrequested measurements
+        have empty frames; their statistics do not describe database coverage.
 
         Args:
             start: Inclusive first date; omit for the complete available record.
             end: Inclusive last date; omit for the complete available record.
+            source: Historical, telemetric, or both sources (the default).
+            series_type: Stage (cota, cm) or discharge (vazao, m³/s); None loads both.
 
         """
         if self.connector is None:
             msg = "Live series loading requires a caller-owned SQL connector in from_folder()."
             raise RuntimeError(msg)
         date_predicate("Data", start, end)
-        # Discover telemetry only when observations are requested, not for basin preparation.
-        self.telemetric_info = self.telemetria.get_telemetric_code(self.code)
+        if source not in ("hidro", "telemetria", "hidro/telemetria"):
+            msg = "Source must be 'hidro', 'telemetria', or 'hidro/telemetria'."
+            raise ValueError(msg)
+        if series_type is not None:
+            validate_series_type(series_type)
+        kinds = ("cota", "vazao") if series_type is None else (series_type,)
+        # Skip telemetry inventory entirely for a historical-only request.
+        self.telemetric_info = (
+            self.telemetria.get_telemetric_code(self.code) if "telemetria" in source else None
+        )
+
+        # Keep the existing shape expected by get_series and calc_stats without querying
+        # sources or measurements that were not requested.
         self.series: dict[int, dict[SeriesType, pd.DataFrame]] = {
-            self.code: {
-                kind: self.hidro.get_series(self.code, kind, start=start, end=end)
-                for kind in ("cota", "vazao")
-            },
+            self.code: {kind: empty_series() for kind in ("cota", "vazao")},
         }
+        if "hidro" in source:
+            for kind in kinds:
+                self.series[self.code][kind] = self.hidro.get_series(
+                    self.code,
+                    kind,
+                    start=start,
+                    end=end,
+                )
+
         if self.telemetric_info is not None:
             for code in self.telemetric_info.index:
-                self.series[int(code)] = {
-                    kind: self.telemetria.get_series(
+                self.series[int(code)] = {kind: empty_series() for kind in ("cota", "vazao")}
+                for kind in kinds:
+                    self.series[int(code)][kind] = self.telemetria.get_series(
                         int(code),
                         kind,
                         start=start,
                         end=end,
                     )
-                    for kind in ("cota", "vazao")
-                }
+
         self.calc_stats()
 
     def get_source(self, station_code: int) -> str:

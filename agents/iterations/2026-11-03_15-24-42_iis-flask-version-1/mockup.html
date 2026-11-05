@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHC · Prévia da primeira versão</title>
+<style>
+:root{--navy:#15354c;--blue:#145d83;--muted:#617589;--line:#dce5ec;--bg:#eef3f7;--white:#fff;--soft:#e8f2f8;--green:#24744a}*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;color:var(--navy);background:var(--bg)}button,input,a{font:inherit}button,a{touch-action:manipulation}button{cursor:pointer}button:disabled{cursor:default;opacity:.5}button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #dfaa30;outline-offset:3px}button,.button{border-radius:7px;padding:10px 17px;border:1px solid var(--blue);background:var(--blue);color:#fff;text-decoration:none;display:inline-flex;align-items:center;gap:9px;font-weight:600}button.secondary{background:white;border-color:var(--line);color:var(--navy)}button.quiet{background:none;color:var(--blue);border-color:transparent;padding:5px 8px}button.danger{color:#aa3b35;background:#fff;border-color:var(--line);padding:8px 10px}h1,h2,h3,p{margin-top:0}h1{font-size:29px;line-height:1.2;letter-spacing:-.5px}h2{font-size:20px}h3{font-size:17px}.muted{color:var(--muted)}.small{font-size:12px}.pill{font-size:11px;letter-spacing:.5px;background:var(--soft);padding:4px 9px;border-radius:30px;color:var(--blue);font-weight:650}.prototype{background:#17354b;color:#e4eef4;padding:9px 25px;display:flex;gap:20px;align-items:center;justify-content:space-between;font-size:12px;flex-wrap:wrap}.prototype nav{display:flex;gap:10px}.prototype a{color:#e4eef4}.prototype a:hover{color:white}.app-header{background:white;border-bottom:1px solid var(--line)}.header-inner{max-width:1500px;margin:auto;padding:20px 32px;display:flex;align-items:center;gap:16px}.logo{background:var(--blue);color:white;width:48px;height:48px;border-radius:12px;display:grid;place-items:center;font-weight:800;font-size:18px}.brand{flex:1}.brand strong{font-size:21px;letter-spacing:1px}.brand div{font-size:13px;color:var(--muted)}.identity{text-align:right;font-size:13px}.identity span{display:block;color:var(--muted);font-size:11px}.tabs{max-width:1500px;margin:auto;display:flex;padding:0 32px;gap:26px;overflow:auto}.tabs a{padding:13px 2px;color:var(--muted);white-space:nowrap;text-decoration:none;border-bottom:3px solid transparent;font-weight:600;font-size:13px}.tabs a.active{color:var(--blue);border-color:var(--blue)}.tabs a[aria-disabled=true]{color:#97a7b3;cursor:default}.tabs small{font-size:10px;margin-left:5px}.page{max-width:1500px;margin:0 auto;padding:30px 32px 50px}.welcome{max-width:1170px;margin:auto;padding-top:45px}.welcome>p{max-width:650px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:32px}.card{background:white;border:1px solid var(--line);border-radius:13px;padding:26px}.module-icon{width:48px;height:48px;border-radius:10px;background:var(--soft);display:grid;place-items:center;color:var(--blue);font-size:24px;margin-bottom:22px}.cards .card p{color:var(--muted);min-height:68px}.cards a.button{margin-top:8px}.inactive{background:#f8fafb}.inactive .module-icon{color:#80909e;background:#edf1f4}.login-wrap{min-height:80vh;display:grid;place-items:center;padding:45px 22px}.login-card{background:white;padding:44px;max-width:704px;width:100%;border-radius:18px}.login-card h1{font-size:31px;max-width:590px}.login-card p{max-width:580px}.login-card .logo{margin-bottom:25px}.login-card .eyebrow{color:var(--muted);font-size:13px;margin-bottom:14px}.login-card .fineprint{margin-top:25px;margin-bottom:0;font-size:12px;color:var(--muted)}.code-box{background:var(--soft);padding:24px;border-radius:10px;margin:23px 0}.device-code{font-size:30px;font-weight:750;letter-spacing:4px;margin:15px 0}.layout{display:grid;grid-template-columns:270px minmax(0,1fr);gap:26px;align-items:start}.sidebar{background:white;border:1px solid var(--line);border-radius:12px;overflow:hidden}.sidebar-head{padding:20px 17px 14px;border-bottom:1px solid var(--line)}.sidebar-head h2{font-size:16px;display:flex;justify-content:space-between;margin:0 0 15px}.sidebar-head button{width:100%;justify-content:center;font-size:13px}.search{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:7px;margin-top:12px;font-size:13px}.stations{padding:7px;max-height:660px;overflow:auto}.station{display:flex;align-items:center;gap:7px;text-align:left;width:100%;border:1px solid transparent;border-radius:5px;background:white;color:var(--navy);padding:6px 8px;font-size:12px;font-weight:600;margin-bottom:1px;min-height:33px;white-space:nowrap}.station code{flex:none;font:12px/1.4 ui-monospace,monospace;color:var(--muted);font-variant-numeric:tabular-nums}.station-name{min-width:0;overflow:hidden;text-overflow:ellipsis}.station-separator{color:#93a4b0;font-weight:400}.station:hover{background:#f6f9fb}.station.selected{background:var(--soft);border-color:#bed8e8;color:var(--blue)}.breadcrumb{font-size:12px;color:var(--muted);margin-bottom:13px}.title-row{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:19px}.title-row h1{font-size:26px;margin:0 0 5px}.title-row button{font-size:13px}.metadata{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0 20px}.metadata span{font-size:12px;background:#e3ebf0;color:#415d71;border-radius:5px;padding:5px 9px}.chart-card{background:white;border:1px solid var(--line);border-radius:12px;padding:22px}.chart-heading{display:flex;justify-content:space-between;align-items:start;gap:10px}.chart-heading h2{font-size:17px;margin-bottom:5px}.chart-heading p{font-size:12px;color:var(--muted);margin:0}.chart-heading button{padding:7px 11px;font-size:12px}.chart-card img{display:block;width:100%;height:auto;margin:18px 0 2px}.image-note{font-size:11px;color:var(--muted);margin:0}.limits{margin-top:22px}.limits .head{display:flex;justify-content:space-between;align-items:center;gap:10px}.limits h2{margin-bottom:5px}.limits p{font-size:13px}.limit-table{width:100%;border-collapse:collapse;margin:20px 0}.limit-table th{text-align:left;color:var(--muted);font-size:12px;font-weight:500;padding:0 8px 10px}.limit-table td{padding:6px 8px}.limit-table td:first-child,.limit-table th:first-child{padding-left:0}.limit-table input{border:1px solid var(--line);border-radius:6px;padding:9px 10px;width:100%;color:var(--navy);background:white}.limit-table .value{max-width:160px}.limit-table .remove{width:50px}.limits-footer{display:flex;justify-content:space-between;align-items:center;gap:15px;border-top:1px solid var(--line);padding-top:16px}.limits-footer span{font-size:12px;color:var(--muted)}.no-results{text-align:center;padding:30px 12px;color:var(--muted)}dialog{border:1px solid var(--line);border-radius:16px;padding:30px;max-width:1080px;width:calc(100% - 36px);max-height:calc(100vh - 40px);overflow:auto;color:var(--navy)}dialog::backdrop{background:rgba(16,39,56,.45)}.dialog-head{display:flex;justify-content:space-between;align-items:start}dialog label{font-size:13px;display:block;margin-bottom:6px}dialog input{padding:10px;border:1px solid var(--line);border-radius:7px;width:100%}.dialog-help{padding:15px;background:var(--soft);border-radius:8px;font-size:12px;margin:18px 0}.dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:24px}#toast{position:fixed;bottom:25px;right:25px;background:#174d39;color:#fff;max-width:450px;padding:16px 22px;border-radius:10px;box-shadow:0 5px 20px #0002;z-index:5;font-size:13px}#toast[hidden],[hidden]{display:none!important}@media(max-width:1000px){.layout{grid-template-columns:230px minmax(0,1fr);gap:18px}.page{padding:22px 20px}.title-row{align-items:start;flex-direction:column}.cards{grid-template-columns:1fr}}@media(max-width:700px){.header-inner{padding:18px}.brand div{font-size:11px}.identity{display:none}.tabs{padding:0 18px;gap:18px}.layout{display:block}.sidebar{margin-bottom:25px}.stations{max-height:220px}.login-card{padding:30px 25px}.login-card h1{font-size:27px}.limits-footer{align-items:start;flex-direction:column}.chart-card{padding:15px}.prototype{padding:10px 18px}.chart-heading{flex-wrap:wrap}}
+
+.steps{display:flex;gap:20px;padding:0;margin:6px 0 24px;list-style:none;font-size:13px;color:var(--muted)}
+.steps li{padding-bottom:8px;border-bottom:3px solid var(--line)}.steps li.active{color:var(--blue);border-color:var(--blue);font-weight:650}
+.station-count-note{font-size:11px;padding:5px 8px 12px;color:var(--muted)}
+.stats-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:12px 0 8px}
+.stats-table{border-collapse:collapse;min-width:960px;width:100%;font-size:12px;white-space:nowrap}
+.stats-table th{background:#eaf0f4;font-weight:600;padding:9px 7px;text-align:center;border-bottom:1px solid var(--line)}
+.stats-table td{padding:10px 7px;text-align:right;border-bottom:1px solid var(--line)}
+.stats-table td:nth-child(2){text-align:left}.stats-table tr:last-child td{border-bottom:0}
+.review-section{border-top:1px solid var(--line);padding-top:22px;margin-top:24px}
+.review-section h3{margin-bottom:4px}.method-options{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:15px 0}
+.method-option{display:flex;align-items:start;gap:10px;padding:15px;border:1px solid var(--line);border-radius:8px;cursor:pointer}
+.method-option:has(input:checked){border-color:var(--blue);background:var(--soft)}
+.method-option input{width:auto;margin-top:5px;accent-color:var(--blue)}
+.method-option strong,.method-option span{display:block}.method-option span{font-size:12px;color:var(--muted);margin-top:4px}
+.method-option em{font-style:normal;font-size:10px;font-weight:500;color:var(--blue);margin-left:4px}
+.sanitization-scroll{overflow-x:auto}.sanitization-table{width:100%;border-collapse:collapse;min-width:640px;font-size:13px;margin:12px 0}
+.sanitization-table th{text-align:left;font-size:12px;font-weight:500;color:var(--muted);padding:6px}
+.sanitization-table td{padding:6px}.sanitization-table select{font:inherit;padding:10px;border:1px solid var(--line);border-radius:7px;width:100%;background:white;color:var(--navy)}
+.sanitization-table input{min-width:120px}.sanitization-table .remove{width:50px}.review-heading{display:flex;justify-content:space-between;align-items:start;gap:10px}
+.review-section details{margin:15px 0;font-size:12px;color:var(--muted)}.review-section summary{cursor:pointer}
+.review-section pre{background:#f3f6f8;padding:14px;white-space:pre-wrap;color:var(--navy);border-radius:6px}
+#calculation-settings{border:0;padding:0;margin:0;min-width:0}#calculation-settings:disabled{opacity:.55}
+.review-station-title{font-size:20px;margin:0}.review-code{font-size:12px;color:var(--muted)}
+#consult-step{max-width:650px}.consult-row{display:flex;align-items:end;gap:12px}.consult-row>div{flex:1}.consult-row button{white-space:nowrap}
+@media(max-width:700px){.method-options{grid-template-columns:1fr}.consult-row{align-items:stretch;flex-direction:column}.steps{gap:12px;font-size:12px}dialog{padding:20px}.review-heading{flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<div class="prototype"><span>PRÉVIA VISUAL · sem autenticação real e sem gravação de arquivos</span><nav aria-label="Telas do protótipo"><a href="#login">Entrada</a><a href="#home">Início</a><a href="#permanencia">Curvas de Permanência</a></nav></div>
+<section id="login-screen" class="login-wrap" hidden>
+  <div class="login-card"><div class="logo" aria-hidden="true">SHC</div><p class="eyebrow">Sistema Hidrológico da COVEC</p><h1>SHC — Sistema Hidrológico da COVEC</h1><p>Entre com sua conta institucional Microsoft para acessar as ferramentas de análise hidrológica.</p><div id="login-start"><button id="sign-in">Entrar com a Microsoft</button></div><div id="device-step" hidden><div class="code-box"><p>Acesse a página de entrada da Microsoft e informe o código:</p><div class="device-code">ABCD EFGH</div><span class="small muted">Código ilustrativo · a página identificará a conclusão da entrada automaticamente.</span></div><button id="finish-login">Simular entrada concluída</button> <button class="quiet" id="cancel-login">Cancelar</button></div><p class="fineprint">Acesso institucional · as consultas usam suas permissões no banco de dados.</p></div>
+</section>
+<div id="app-shell" hidden>
+<header class="app-header"><div class="header-inner"><div class="logo" aria-hidden="true">SHC</div><div class="brand"><strong>SHC</strong><div>Sistema Hidrológico da COVEC</div></div><div class="identity">Usuário COVEC<span>Conta institucional Microsoft</span></div><button class="quiet" id="sign-out">Sair</button></div><nav class="tabs" aria-label="Módulos da SHC"><a href="#home" data-tab="home">Início</a><a href="#permanencia" data-tab="permanencia">Curvas de Permanência</a><a aria-disabled="true" tabindex="-1">Chuvas <small>Em breve</small></a><a aria-disabled="true" tabindex="-1">CN3S <small>Em breve</small></a></nav></header>
+<section id="home-screen" class="page" hidden><div class="welcome"><p class="muted small">SISTEMA HIDROLÓGICO DA COVEC</p><h1>Ferramentas para acompanhar<br>e analisar nossos rios.</h1><p class="muted">Selecione um módulo para começar. As estações e os limites de referência são compartilhados pela equipe.</p><div class="cards"><article class="card"><div class="module-icon" aria-hidden="true">∿</div><span class="pill">DISPONÍVEL</span><h2 style="margin-top:16px">Curvas de Permanência</h2><p>Consulte cotas históricas, acompanhe os últimos anos e gerencie os limites de referência das estações.</p><a class="button" href="#permanencia">Acessar módulo <span aria-hidden="true">→</span></a></article><article class="card inactive"><div class="module-icon" aria-hidden="true">☂</div><span class="pill">EM BREVE</span><h2 style="margin-top:16px">Chuvas</h2><p>Um espaço para as análises de precipitação da equipe.</p><button disabled>Em desenvolvimento</button></article><article class="card inactive"><div class="module-icon" aria-hidden="true">≈</div><span class="pill">EM BREVE</span><h2 style="margin-top:16px">CN3S</h2><p>Modelagem hidrológica de chuva e vazão com o modelo CN3S.</p><button disabled>Em desenvolvimento</button></article></div></div></section>
+<section id="curves-screen" class="page" hidden><div class="layout"><aside class="sidebar"><div class="sidebar-head"><h2>Estações <span id="station-count" class="pill">9</span></h2><button id="new-station">+ Inserir nova estação</button><label class="small muted" for="search" style="display:block;margin-top:14px">Buscar por nome ou código</label><input class="search" id="search" type="search" placeholder="Nome ou código da estação" style="margin-top:5px"></div><div class="stations" id="station-list"></div></aside><div><div class="breadcrumb">SHC / Curvas de Permanência</div><div class="title-row"><div><h1 id="station-title">Fazenda Paraíso</h1><span class="muted" id="station-code">Estação 14558000</span></div><button class="secondary" id="refresh">↻ Atualizar observações</button></div><div class="metadata"><span id="source-label">Fonte: HIDRO</span><span id="method-label">Cota a partir da vazão</span><span id="period-label">Curva histórica salva</span></div><article class="chart-card"><div class="chart-heading"><div><h2>Cotas anuais e referências históricas</h2><p>Curva histórica salva e observações dos três últimos anos.</p></div><button class="secondary" id="download">↓ Baixar PNG</button></div><img id="chart" src="mockup-assets/14558000.png" alt="Gráfico anual salvo da estação Fazenda Paraíso, com cotas em centímetros"><p class="image-note">Prévia com o gráfico já salvo da estação. Na aplicação, a telemetria será consultada ao selecioná-la.</p></article><article class="card limits"><div class="head"><div><h2>Limites de referência</h2><p class="muted" style="margin:0">Edite os nomes e os valores em centímetros.</p></div><button class="quiet" id="add-limit">+ Adicionar limite</button></div><table class="limit-table"><thead><tr><th>Nome do limite</th><th>Cota (cm)</th><th><span class="small">Remover</span></th></tr></thead><tbody id="limit-rows"></tbody></table><div class="limits-footer"><span>As alterações salvas serão compartilhadas com toda a equipe.</span><button id="save-limits">Salvar limites</button></div></article></div></div></section>
+</div>
+<dialog id="insert-dialog" aria-labelledby="insert-title">
+  <div class="dialog-head"><div><p class="muted small" style="margin-bottom:6px">CURVAS DE PERMANÊNCIA</p><h2 id="insert-title">Inserir nova estação</h2></div><button class="quiet" id="close-dialog" aria-label="Fechar">✕</button></div>
+  <ol class="steps" aria-label="Etapas de inserção"><li id="consult-step-label" class="active">1 · Consultar estação</li><li id="review-step-label">2 · Revisar e calcular</li></ol>
+  <section id="consult-step">
+    <form id="consult-form"><div class="consult-row"><div><label for="new-code">Código da estação</label><input id="new-code" type="number" min="1" step="1" required placeholder="Ex.: 14558000"></div><button type="submit">Consultar estatísticas</button></div></form>
+    <div class="dialog-help">Primeiro carregamos as séries e suas estatísticas. Com essas informações, você poderá escolher o método e informar correções pontuais antes de calcular a curva.</div>
+    <p class="small muted">A consulta das séries pode levar alguns minutos. Nenhum resultado é salvo nesta etapa.</p>
+    <p class="small muted">Nesta prévia, as estatísticas são ilustrativas, baseadas na imagem fornecida.</p>
+    <div class="dialog-actions"><button type="button" class="secondary" id="cancel-insert">Cancelar</button></div>
+  </section>
+  <section id="review-step" hidden>
+    <div class="review-heading"><div><h3 class="review-station-title" id="review-name">Estação</h3><span class="review-code" id="review-code"></span></div><button class="quiet" id="change-code" type="button">Alterar código</button></div>
+    <div id="existing-station-notice" class="dialog-help" hidden>Esta estação já está cadastrada. Abra a curva existente sem recalcular os resultados.</div>
+    <h3 style="margin:20px 0 0">Estatísticas das séries</h3>
+    <div class="stats-scroll"><table class="stats-table"><thead><tr><th rowspan="2">Código</th><th rowspan="2">Fonte</th><th colspan="6">Cota (cm)</th><th colspan="6">Vazão (m³/s)</th></tr><tr><th>Início</th><th>Fim</th><th>Anos</th><th>Falhas (%)</th><th>Consist. (%)</th><th>Anos efet.</th><th>Início</th><th>Fim</th><th>Anos</th><th>Falhas (%)</th><th>Consist. (%)</th><th>Anos efet.</th></tr></thead><tbody id="stats-rows"></tbody></table></div>
+    <p class="small muted">Prévia: valores ilustrativos. Na aplicação, esta tabela mostrará <code>station.stats</code>, por fonte e variável, antes da combinação das fontes e das correções pontuais.</p>
+    <form id="review-form">
+    <fieldset id="calculation-settings">
+      <section class="review-section"><h3>Método de cálculo</h3><p class="muted small">Escolha o método com base na cobertura e na qualidade das séries.</p>
+        <div class="method-options"><label class="method-option"><input type="radio" name="calculation-method" value="from_discharge" checked><div><strong>A partir da vazão <em>PADRÃO</em></strong><span>Usa as estatísticas de vazão e a curva-chave para obter as cotas.</span></div></label><label class="method-option"><input type="radio" name="calculation-method" value="direct"><div><strong>Diretamente das cotas</strong><span>Calcula as estatísticas usando as cotas observadas.</span></div></label></div>
+        <p class="small muted" id="method-policy">Se a série de vazão ou a curva-chave não permitirem esse cálculo, a SHC poderá usar cotas diretas. O resultado informará o método efetivamente utilizado.</p>
+      </section>
+      <section class="review-section"><div class="review-heading"><div><h3>Correções pontuais <span class="muted small">· opcional</span></h3><p class="small muted">Substitua valores de dias específicos na série final, sem alterar o banco de dados.</p></div><button class="quiet" id="add-sanitization" type="button">+ Adicionar correção</button></div>
+        <div class="sanitization-scroll"><table class="sanitization-table"><thead><tr><th>Variável</th><th>Data</th><th>Valor substituto</th><th>Remover</th></tr></thead><tbody id="sanitization-rows"></tbody></table></div>
+        <p id="no-sanitization" class="small muted">Nenhuma correção informada.</p>
+        <p class="small muted">As correções substituem valores em datas já existentes após a combinação das fontes. Cotas em cm e vazões em m³/s. Não são preenchimento de lacunas nem exclusão de observações.</p>
+        <details><summary>Ver o formato das correções</summary><pre id="sanitization-preview">{}</pre></details>
+      </section>
+      <section class="review-section"><div class="review-heading"><div><h3>Limites iniciais <span class="muted small">· opcional</span></h3><p class="small muted">Referências em centímetros, editáveis depois da inserção.</p></div><button class="quiet" id="new-add-limit" type="button">+ Adicionar limite</button></div><table class="limit-table"><thead><tr><th>Nome do limite</th><th>Cota (cm)</th><th>Remover</th></tr></thead><tbody id="new-limits"></tbody></table></section>
+    </fieldset>
+    <div class="dialog-actions"><button type="button" class="secondary" id="back-to-code">Voltar</button><button type="submit" id="calculate-insert">Calcular e inserir</button></div>
+    </form>
+  </section>
+  <section id="insert-progress" hidden><h3>Calculando a curva da estação</h3><p id="calculation-summary" class="small muted"></p><progress style="width:100%" aria-label="Cálculo em andamento"></progress><p class="small muted">Prévia do processamento. Nenhuma consulta, correção ou gravação real é feita neste protótipo.</p><button class="secondary" id="end-simulation">Voltar à prévia</button></section>
+</dialog>
+<div id="toast" role="status" hidden></div>
+<script id="station-data" type="application/json">[
+  {
+    "station_code": 14480002,
+    "station_name": "BARCELOS",
+    "series_type": "cota",
+    "source": "hidro",
+    "description": "HIDRO(100.0%) - Inicio:1967/11 Fim:2026/02 Anos:58.3 Falhas(%):0.0 Consist(%):96.3",
+    "method": "cota",
+    "thresholds": {
+      "Permanência 95%": 231
+    }
+  },
+  {
+    "station_code": 14489000,
+    "station_name": "MARACÁ",
+    "series_type": "cota",
+    "source": "hidro",
+    "description": "HIDRO(100.0%) - Inicio:2005/11 Fim:2026/04 Anos:20.5 Falhas(%):0.0 Consist(%):88.6",
+    "method": "cota/vazao",
+    "thresholds": {
+      "Permanência 95%": 376.5
+    }
+  },
+  {
+    "station_code": 14527000,
+    "station_name": "PONTE DO TACUTU",
+    "series_type": "cota",
+    "source": "hidro",
+    "description": "HIDRO(100.0%) - Inicio:2005/11 Fim:2026/04 Anos:20.5 Falhas(%):0.0 Consist(%):88.6",
+    "method": "cota/vazao",
+    "thresholds": {
+      "Permanência 95%": 406
+    }
+  },
+  {
+    "station_code": 14558000,
+    "station_name": "FAZENDA PARAÍSO",
+    "series_type": "cota",
+    "source": "hidro",
+    "description": "HIDRO(100.0%) - Inicio:2012/11 Fim:2026/04 Anos:13.5 Falhas(%):0.0 Consist(%):82.7",
+    "method": "cota/vazao",
+    "thresholds": {
+      "Permanência 95%": 439
+    }
+  },
+  {
+    "station_code": 14620000,
+    "station_name": "BOA VISTA",
+    "series_type": "cota",
+    "source": "hidro",
+    "description": "HIDRO(100.0%) - Inicio:1967/12 Fim:2026/04 Anos:58.5 Falhas(%):2.7 Consist(%):95.9",
+    "method": "cota",
+    "thresholds": {
+      "Cota de Alerta (SGB)": 800,
+      "Cota de Inundação (SGB)": 850,
+      "Permanência 95%": 46
+    }
+  },
+  {
+    "station_code": 14680001,
+    "station_name": "FÉ E ESPERANÇA",
+    "series_type": "cota",
+    "source": "hidro",
+    "description": "HIDRO(100.0%) - Inicio:1973/12 Fim:2026/04 Anos:52.4 Falhas(%):0.8 Consist(%):95.5",
+    "method": "cota/vazao",
+    "thresholds": {
+      "Permanência 95%": 175
+    }
+  },
+  {
+    "station_code": 14710000,
+    "station_name": "CARACARAÍ",
+    "series_type": "cota",
+    "source": "hidro",
+    "description": "HIDRO(100.0%) - Inicio:1967/01 Fim:2026/04 Anos:59.4 Falhas(%):0.7 Consist(%):96.0",
+    "method": "cota/vazao",
+    "thresholds": {
+      "Cota de Alerta (SGB)": 850,
+      "Cota de Inundação (SGB)": 900,
+      "Permanência 95%": 54.7
+    }
+  },
+  {
+    "station_code": 14790000,
+    "station_name": "SANTA MARIA DO BOIAÇU",
+    "series_type": "cota",
+    "source": "hidro",
+    "description": "HIDRO(100.0%) - Inicio:1973/01 Fim:2026/01 Anos:53.1 Falhas(%):0.8 Consist(%):95.9",
+    "method": "cota",
+    "thresholds": {
+      "Permanência 95%": 275
+    }
+  },
+  {
+    "station_code": 14840000,
+    "station_name": "MOURA",
+    "series_type": "cota",
+    "source": "hidro",
+    "description": "HIDRO(100.0%) - Inicio:1979/01 Fim:2026/02 Anos:47.1 Falhas(%):0.0 Consist(%):95.4",
+    "method": "cota",
+    "thresholds": {
+      "Permanência 95%": 293
+    }
+  }
+]</script>
+<script>
+const stations=JSON.parse(document.querySelector('#station-data').textContent);
+let selected=14558000;
+const $=s=>document.querySelector(s);
+const title=s=>s.toLocaleLowerCase('pt-BR').replace(/(^|\s)\S/g,c=>c.toLocaleUpperCase('pt-BR'));
+function notify(text){$('#toast').textContent=text;$('#toast').hidden=false;clearTimeout(notify.timer);notify.timer=setTimeout(()=>$('#toast').hidden=true,6500)}
+function view(){const name=location.hash.slice(1)||'login';$('#login-screen').hidden=name!=='login';$('#app-shell').hidden=name==='login';$('#home-screen').hidden=name!=='home';$('#curves-screen').hidden=name!=='permanencia';document.querySelectorAll('[data-tab]').forEach(a=>{a.classList.toggle('active',a.dataset.tab===name);if(a.dataset.tab===name)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current')});if(name==='permanencia')selectStation(selected)}
+let listLimit=50;
+function renderList(){
+  const q=$('#search').value.toLocaleLowerCase('pt-BR');
+  const list=$('#station-list');list.replaceChildren();
+  const matching=stations.filter(s=>`${s.station_name} ${s.station_code}`.toLocaleLowerCase('pt-BR').includes(q));
+  const visible=matching.slice(0,listLimit);
+  for(const s of visible){
+    const b=document.createElement('button');
+    b.className='station'+(s.station_code===selected?' selected':'');
+    b.setAttribute('aria-pressed',s.station_code===selected?'true':'false');
+    b.title=`${s.station_code} / ${title(s.station_name)}`;
+    const code=document.createElement('code');code.textContent=s.station_code;
+    const separator=document.createElement('span');separator.className='station-separator';separator.textContent='/';
+    const name=document.createElement('span');name.className='station-name';name.textContent=title(s.station_name);
+    b.append(code,separator,name);b.onclick=()=>selectStation(s.station_code);list.append(b);
+  }
+  const count=document.createElement('div');count.className='station-count-note';
+  count.textContent=matching.length?`${visible.length} de ${matching.length} estações`:'Nenhuma estação encontrada.';
+  list.append(count);
+  if(matching.length>listLimit){
+    const more=document.createElement('button');more.className='quiet';more.textContent='Carregar mais 50';
+    more.onclick=()=>{listLimit+=50;renderList()};list.append(more);
+  }
+}
+function addRow(container,label='',value=''){const tr=document.createElement('tr');const nameCell=document.createElement('td');const name=document.createElement('input');name.value=label;name.placeholder='Nome do limite';name.setAttribute('aria-label','Nome do limite');name.required=true;nameCell.append(name);const valueCell=document.createElement('td');valueCell.className='value';const input=document.createElement('input');input.type='number';input.step='any';input.value=value;input.required=true;input.placeholder='Cota (cm)';input.setAttribute('aria-label','Cota em centímetros');valueCell.append(input);const removeCell=document.createElement('td');removeCell.className='remove';const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='×';remove.setAttribute('aria-label','Remover limite');remove.onclick=()=>tr.remove();removeCell.append(remove);tr.append(nameCell,valueCell,removeCell);container.append(tr)}
+function selectStation(code){selected=code;const s=stations.find(x=>x.station_code===code);$('#station-title').textContent=title(s.station_name);$('#station-code').textContent='Estação '+s.station_code;$('#source-label').textContent='Fonte: '+s.source.toLocaleUpperCase('pt-BR');$('#method-label').textContent=s.method==='cota/vazao'?'Cota a partir da vazão':'Cota observada';const start=s.description.match(/Inicio:([^ ]+)/),end=s.description.match(/Fim:([^ ]+)/);$('#period-label').textContent=start&&end?'Histórico: '+start[1]+' a '+end[1]:'Curva histórica salva';$('#chart').src='mockup-assets/'+code+'.png';$('#chart').alt='Gráfico anual salvo da estação '+title(s.station_name);$('#limit-rows').replaceChildren();Object.entries(s.thresholds).forEach(([k,v])=>addRow($('#limit-rows'),k,v));renderList()}
+$('#search').oninput=()=>{listLimit=50;renderList()};$('#add-limit').onclick=()=>addRow($('#limit-rows'));$('#save-limits').onclick=()=>{const rows=[...$('#limit-rows').rows];if(rows.some(r=>![...r.querySelectorAll('input')].every(i=>i.reportValidity())))return;const names=rows.map(r=>r.cells[0].firstChild.value.trim());if(names.some(n=>!n)||new Set(names).size!==names.length){notify('Informe nomes distintos para os limites.');return}notify('Simulação: os limites seriam salvos para toda a equipe e o gráfico seria atualizado. A imagem desta prévia permanece original.')};$('#refresh').onclick=()=>notify('Simulação: a SHC consultará a telemetria recente sem recalcular a curva histórica.');$('#download').onclick=()=>{const a=document.createElement('a');a.href=$('#chart').src;a.download='SHC_cotas_'+selected+'.png';a.click()};$('#sign-in').onclick=()=>{$('#login-start').hidden=true;$('#device-step').hidden=false};$('#finish-login').onclick=()=>location.hash='home';$('#cancel-login').onclick=()=>{$('#login-start').hidden=false;$('#device-step').hidden=true};$('#sign-out').onclick=()=>{location.hash='login';$('#cancel-login').click()};
+let inspectedCode=null;
+let reviewedCode=null;
+function insertionStep(step){
+  $('#consult-step').hidden=step!=='consult';$('#review-step').hidden=step!=='review';$('#insert-progress').hidden=step!=='progress';
+  $('#consult-step-label').classList.toggle('active',step==='consult');$('#review-step-label').classList.toggle('active',step!=='consult');
+  $('#insert-dialog').scrollTop=0;
+}
+function readSanitization(validate=false){
+  const result={};
+  for(const row of $('#sanitization-rows').rows){
+    const variable=row.querySelector('select').value;
+    const date=row.querySelector('input[type=date]');
+    const value=row.querySelector('input[type=number]');
+    if(!date.value||value.value===''||!Number.isFinite(Number(value.value))){
+      if(validate){date.reportValidity();value.reportValidity();return null}continue;
+    }
+    if(result[variable]&&Object.hasOwn(result[variable],date.value)){
+      if(validate){notify('Informe somente uma correção por variável e data.');return null}continue;
+    }
+    (result[variable]??={})[date.value]=Number(value.value);
+  }
+  return result;
+}
+function updateSanitizationPreview(){
+  $('#no-sanitization').hidden=$('#sanitization-rows').rows.length>0;
+  $('#sanitization-preview').textContent=JSON.stringify(readSanitization(),null,2);
+}
+function addSanitizationRow(){
+  const row=document.createElement('tr');
+  const variableCell=document.createElement('td');const variable=document.createElement('select');variable.setAttribute('aria-label','Variável a corrigir');
+  for(const [key,label] of [['cota','Cota (cm)'],['vazao','Vazão (m³/s)']]){const option=document.createElement('option');option.value=key;option.textContent=label;variable.append(option)}
+  variableCell.append(variable);
+  const dateCell=document.createElement('td');const date=document.createElement('input');date.type='date';date.required=true;date.setAttribute('aria-label','Data da observação');dateCell.append(date);
+  const valueCell=document.createElement('td');const value=document.createElement('input');value.type='number';value.step='any';value.required=true;value.placeholder='Valor em cm';value.setAttribute('aria-label','Valor substituto em centímetros');valueCell.append(value);
+  const removeCell=document.createElement('td');removeCell.className='remove';const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='×';remove.setAttribute('aria-label','Remover correção');remove.onclick=()=>{row.remove();updateSanitizationPreview()};removeCell.append(remove);
+  variable.onchange=()=>{value.placeholder=variable.value==='cota'?'Valor em cm':'Valor em m³/s';value.setAttribute('aria-label',variable.value==='cota'?'Valor substituto em centímetros':'Valor substituto em metros cúbicos por segundo');updateSanitizationPreview()};date.oninput=updateSanitizationPreview;value.oninput=updateSanitizationPreview;
+  row.append(variableCell,dateCell,valueCell,removeCell);$('#sanitization-rows').append(row);updateSanitizationPreview();
+}
+function inspectStation(code){
+  if(reviewedCode!==code){
+    $('#review-form').reset();$('#sanitization-rows').replaceChildren();$('#new-limits').replaceChildren();updateSanitizationPreview();
+  }
+  reviewedCode=code;
+  inspectedCode=code;const existing=stations.find(s=>s.station_code===code);
+  $('#review-name').textContent=existing?title(existing.station_name):'Nova estação · prévia';$('#review-code').textContent='Estação '+code;
+  $('#existing-station-notice').hidden=!existing;$('#calculation-settings').disabled=Boolean(existing);
+  $('#calculate-insert').textContent=existing?'Abrir estação existente':'Calcular e inserir';
+  // Illustrative statistics from the user's screenshot, not live station data.
+  const rows=[
+    [String(code),'Hidro','2012/11','2026/06','13,6','0,0','81,7','13,6','2012/11','2026/06','13,6','0,0','81,7','13,6'],
+    ['31960200','Telemetria/RHN','2012/05','2026/11','14,4','3,2','0,0','13,9','2012/07','2026/11','14,4','3,2','0,0','13,9']
+  ];
+  $('#stats-rows').replaceChildren();for(const values of rows){const tr=document.createElement('tr');for(const value of values){const td=document.createElement('td');td.textContent=value;tr.append(td)}$('#stats-rows').append(tr)}
+  insertionStep('review');
+}
+$('#new-station').onclick=()=>{
+  inspectedCode=null;reviewedCode=null;$('#new-code').value='';$('#new-limits').replaceChildren();$('#sanitization-rows').replaceChildren();
+  $('#review-form').reset();$('#calculation-settings').disabled=false;updateSanitizationPreview();insertionStep('consult');$('#insert-dialog').showModal();
+};
+$('#consult-form').onsubmit=e=>{e.preventDefault();const code=Number($('#new-code').value);if(!Number.isSafeInteger(code)||code<=0)return;inspectStation(code)};
+$('#change-code').onclick=$('#back-to-code').onclick=()=>{inspectedCode=null;insertionStep('consult')};
+$('#add-sanitization').onclick=addSanitizationRow;
+$('#new-add-limit').onclick=()=>addRow($('#new-limits'));
+for(const id of ['close-dialog','cancel-insert','end-simulation'])$('#'+id).onclick=()=>$('#insert-dialog').close();
+$('#review-form').onsubmit=e=>{
+  e.preventDefault();if(inspectedCode===null)return;
+  if(stations.some(s=>s.station_code===inspectedCode)){$('#insert-dialog').close();selectStation(inspectedCode);notify('A estação já existe. A curva histórica salva foi aberta.');return}
+  const corrections=readSanitization(true);if(corrections===null)return;
+  const names=[...$('#new-limits').rows].map(r=>r.cells[0].firstChild.value.trim());
+  if(names.some(n=>!n)||new Set(names).size!==names.length){notify('Informe nomes distintos para os limites.');return}
+  const method=document.querySelector('input[name=calculation-method]:checked').value;
+  const count=Object.values(corrections).reduce((sum,values)=>sum+Object.keys(values).length,0);
+  $('#calculation-summary').textContent=`Estação ${inspectedCode} · ${method==='from_discharge'?'A partir da vazão':'Diretamente das cotas'} · ${count} correção(ões) pontual(is) · ${names.length} limite(s).`;
+  insertionStep('progress');
+};
+window.addEventListener('hashchange',view);view();
+</script>
+</body>
+</html>

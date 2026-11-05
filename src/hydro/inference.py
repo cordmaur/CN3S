@@ -73,7 +73,7 @@ class Inference:
                 uses all remaining downloaded leads; explicit counts must be available.
 
         Returns:
-            None. Prepared arrays belong to rainfall. Clears rain_scenarios,
+            None. Prepared arrays belong to rainfall.data. Clears rain_scenarios,
             discharge_scenarios and model results. Current-month observations may
             be partial; run_model uses a separate saved historical rainfall prefix.
 
@@ -101,16 +101,17 @@ class Inference:
             calibration files are read only, and stored discharge is not used.
 
         """
-        rainfall = self.rainfall
+        forecast = self.rainfall.data["forecast"]
+        forecast_start = pd.Timestamp(forecast.attrs["forecast_start"])
         history = pd.read_parquet(self.station.station_dir / "Monthly" / "rain.parquet")[
             "prec_mm"
         ].copy()
-        history = history.loc[history.index < rainfall.forecast_start]
-        climatology = rainfall.rain_climatology.sel(time=rainfall.forecast.time).to_pandas()
+        history = history.loc[history.index < forecast_start]
+        climatology = self.rainfall.data["climatology"]["basin_mean"].sel(time=forecast.time)
         future_rain = pd.DataFrame(
             {
-                "climatology": climatology,
-                "forecast": rainfall.rain_forecast,
+                "climatology": climatology.to_pandas(),
+                "forecast": forecast["basin_forecast"].to_pandas(),
             },
         )
         self.rain_scenarios = pd.concat(
@@ -190,9 +191,10 @@ class Inference:
         if months_each_side < 1:
             msg = "months_each_side must be at least 1."
             raise ValueError(msg)
-        current_month = self.rainfall.as_of.to_period("M").to_timestamp()
+        as_of = pd.Timestamp(self.rainfall.data["forecast"].attrs["as_of"])
+        current_month = as_of.to_period("M").to_timestamp()
         # Limit observations to the reference day, even when SQL returns more recent data.
-        daily = self.discharge_daily.sort_index().loc[: self.rainfall.as_of.normalize()]
+        daily = self.discharge_daily.sort_index().loc[: as_of.normalize()]
         self.discharge_monthly = daily.resample("MS").agg(["mean", "count"])
         history = self.discharge_monthly.loc[self.discharge_monthly.index < current_month, "mean"]
         # Each year-month contributes one mean, rather than pooling unequal daily samples.
@@ -209,7 +211,7 @@ class Inference:
             self.discharge_monthly,
             self.discharge_scenarios,
             self.discharge_monthly_stats,
-            as_of=self.rainfall.as_of,
+            as_of=as_of,
             months_each_side=months_each_side,
             anchor_to_observed=anchor_to_observed,
         )
@@ -228,11 +230,13 @@ class Inference:
             Call run_model and load_discharge first; this method performs no I/O.
 
         """
+        forecast = self.rainfall.data["forecast"]
+        as_of = pd.Timestamp(forecast.attrs["as_of"])
         if colors is None:
             colors = {
-                self.rainfall.as_of.year - 2: "green",
-                self.rainfall.as_of.year - 1: "blue",
-                self.rainfall.as_of.year: "black",
+                as_of.year - 2: "green",
+                as_of.year - 1: "blue",
+                as_of.year: "black",
             }
         dates = pd.DatetimeIndex(self.discharge_daily.index)
         groups = self.discharge_daily.groupby([dates.month, dates.day])
@@ -250,7 +254,7 @@ class Inference:
             daily_stats,
             monthly_median,
             colors=colors,
-            forecast_steps=len(self.rainfall.forecast_months),
+            forecast_steps=forecast.sizes["time"],
             act=self.params.act,
-            as_of=self.rainfall.as_of,
+            as_of=as_of,
         )

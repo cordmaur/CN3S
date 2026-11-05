@@ -12,7 +12,7 @@ from matplotlib.patches import Patch
 
 from .hidro import SeriesType, Source
 from .hydro_stats import HydroStats
-from .station import Station
+from .station import DataSanitization, Station
 
 Method: TypeAlias = Literal["direct", "from_discharge"]
 CurveType: TypeAlias = Literal["daily", "exceedance"]
@@ -135,6 +135,8 @@ class DurationCurveResult:
     method: Method
     # Caller-provided stage levels in centimetres, keyed by their legend labels.
     thresholds: dict[str, float] = field(default_factory=dict)
+    sanitization: DataSanitization = field(default_factory=dict)
+    requested_method: Method | None = None
 
     def update_thresholds(self, thresholds: dict[str, float]) -> None:
         """
@@ -169,6 +171,8 @@ class DurationCurveResult:
             "description": self.description,
             "method": self.method,
             "thresholds": self.thresholds,
+            "sanitization": self.sanitization,
+            "requested_method": self.requested_method,
         }
         (path / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
@@ -409,14 +413,15 @@ class DurationCurveReporter:
 
         hidro = self.station.hidro
 
-        status = "OK"
+        requested_method = method
 
         if source is None:
             source = self._select_best_source(series_type)
 
         if (series_type == "vazao") or (method == "direct"):
             print(f"Calculating {series_type} duration curve directly...")
-            df, stats = self.station.get_series(source, series_type, period)
+            df = self.station.get_series(source, series_type, period)
+            stats = HydroStats.calc_series_stats(df, "val", None)
 
         else:
             # At this point, we want stage curve through from_discharge method
@@ -426,15 +431,16 @@ class DurationCurveReporter:
             stats_q = HydroStats.calc_series_stats(df_q, "val", None)
 
             if df_q.empty and df_s.empty:
-                msg = "No data for station {self.station.code}/{self.station.name}"
+                msg = f"No data for station {self.station.code}/{self.station.name}"
                 raise ValueError(msg)
 
             # Calculate discharge to stage ratio
-            q_to_s_ratio = len(df_q) / len(df_s)
+            q_to_s_ratio = len(df_q) / len(df_s) if len(df_s) else float("inf")
 
             # Decide whether to use discharge or stage curve
-            if (q_to_s_ratio < self.DISCHARGE_STAGE_LENGHT_THRESHOLD) or (
-                stats_q["Anos (Efet.)"] < self.MIN_YEARS_THRESHOLD
+            if not df_s.empty and (
+                (q_to_s_ratio < self.DISCHARGE_STAGE_LENGHT_THRESHOLD)
+                or (stats_q["Anos (Efet.)"] < self.MIN_YEARS_THRESHOLD)
             ):
                 print("Obtendo cota diretamente")
                 method = "direct"
@@ -445,7 +451,12 @@ class DurationCurveReporter:
                 df = df_q
                 stats = stats_q
 
-        # Calculate the percentiles for the dataframe
+        if df.empty:
+            raise ValueError(
+                f"No usable {series_type} observations for station {self.station.code}."
+            )
+
+        # Calculate calendar-day statistics from the selected, sanitized daily record.
         curve = HydroStats._calc_quantiles(df, "val")
 
         # Check if we need to convert from discharge to stage
@@ -463,9 +474,12 @@ class DurationCurveReporter:
 
             except Exception as e:
                 print(f"Error converting discharge to stage: {e}")
-                status = "Problema na curva chave"
                 method = "direct"
-                df = self.station.get_series(source, "cota")
+                df = self.station.get_series(source, "cota", period)
+                if df.empty:
+                    raise ValueError(
+                        "Rating-curve conversion failed and no stage data is available."
+                    ) from e
                 stats = HydroStats.calc_series_stats(df, "val", None)
                 curve = HydroStats._calc_quantiles(df, "val")
 
@@ -489,6 +503,8 @@ class DurationCurveReporter:
             stats=pd.Series(stats),  # calc_series_stats returns a dict; the result stores a Series
             method=method,
             thresholds=dict(self.thresholds),
+            sanitization=self.station.sanitization or {},
+            requested_method=requested_method,
         )
 
     def save_results(self, base_path: str | Path) -> None:
@@ -536,6 +552,8 @@ class DurationCurveReporter:
         self,
         ax: plt.Axes,
         ref_year: int | None = None,
+        lookback: int = 2,
+        allow_missing_telemetry: bool = False,
     ) -> None:
         """
         Plot climatological stage statistics with recent telemetric observations.
@@ -552,6 +570,8 @@ class DurationCurveReporter:
             ax: Matplotlib axes on which to draw the chart.
             ref_year: Calendar year used for the climatology axis. Defaults to
                 the current year.
+            allow_missing_telemetry: Draw historical references with an explicit
+                notice when no recent telemetry exists. Defaults to False.
 
         Raises:
             ValueError: If no result exists, the result is not a stage curve, or
@@ -567,7 +587,7 @@ class DurationCurveReporter:
             raise ValueError(msg)
 
         ref_year = pd.Timestamp.now().year if ref_year is None else ref_year
-        start_year = ref_year - 2
+        start_year = ref_year - lookback
 
         # Uses the series already loaded in the station; reload it beforehand to get the
         # latest observations.
@@ -576,7 +596,7 @@ class DurationCurveReporter:
             series_type="cota",
             period=slice(f"{start_year}-01-01", f"{ref_year}-12-31"),
         )
-        if telemetry.empty:
+        if telemetry.empty and not allow_missing_telemetry:
             msg = (
                 f"No telemetric stage observations for station {self.station.code} "
                 f"from {start_year} through {ref_year}."
@@ -647,6 +667,8 @@ class DurationCurveReporter:
             title += "Permanência de cotas obtidas a partir da vazão\n"
         else:
             title += f"Permanência de {self.results.series_type}\n"
+        if telemetry.empty:
+            title += "Sem observações telemétricas recentes\n"
         ax.set_title(title + self.results.description)
 
         ax.xaxis.set_major_locator(mdates.MonthLocator())

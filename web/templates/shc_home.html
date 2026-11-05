@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="page" id="home-screen">
+<div class="welcome">
+<p class="muted small">SISTEMA HIDROLÓGICO DA COVEC</p>
+<h1>Ferramentas para acompanhar<br/>e analisar nossos rios.</h1>
+<p class="muted">Selecione um módulo para começar. As estações e os limites de referência são compartilhados pela equipe.</p>
+<div class="cards">
+<article class="card">
+<div aria-hidden="true" class="module-icon">∿</div>
+<span class="pill">DISPONÍVEL</span>
+<h2 style="margin-top:16px">Curvas de Permanência</h2>
+<p>Consulte cotas históricas, acompanhe os últimos anos e gerencie os limites de referência das estações.</p>
+<a class="button" href="{{ url_for('permanencia.index') }}">Acessar módulo <span aria-hidden="true">→</span>
+</a>
+</article>
+<article class="card inactive">
+<div aria-hidden="true" class="module-icon">☂</div>
+<span class="pill">EM BREVE</span>
+<h2 style="margin-top:16px">Chuvas</h2>
+<p>Um espaço para as análises de precipitação da equipe.</p>
+<button disabled="">Em desenvolvimento</button>
+</article>
+<article class="card inactive">
+<div aria-hidden="true" class="module-icon">≈</div>
+<span class="pill">EM BREVE</span>
+<h2 style="margin-top:16px">CN3S</h2>
+<p>Modelagem hidrológica de chuva e vazão com o modelo CN3S.</p>
+<button disabled="">Em desenvolvimento</button>
+</article>
+</div>
+</div>
+</section>
+{% endblock %}

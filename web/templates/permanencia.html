@@ -1,0 +1,266 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="page" style="padding-bottom:0">
+{% if catalog_error %}<p class="notice" role="alert">{{ catalog_error }}</p>{% endif %}
+<div id="operation-progress" class="dialog-help" hidden>
+<p id="operation-phase" role="status">
+</p>
+<progress style="width:100%" aria-label="Processamento em andamento">
+</progress>
+</div>
+<p id="workspace-error" class="notice" role="alert" hidden>
+</p>
+</div>
+<section class="page" id="curves-screen">
+<div class="layout">
+<aside class="sidebar">
+<div class="sidebar-head">
+<h2>Estações <span class="pill" id="station-count">{{ stations|length }}</span>
+</h2>
+<button id="new-station">+ Inserir nova estação</button>
+<label class="small muted" for="search" style="display:block;margin-top:14px">Buscar por nome ou código</label>
+<input class="search" id="search" placeholder="Nome ou código da estação" style="margin-top:5px" type="search"/>
+</div>
+<div class="stations" id="station-list">
+</div>
+</aside>
+<div class="card" id="initial-panel">
+<h2>Selecione uma estação</h2>
+<p class="muted">Escolha uma estação na lista ou insira uma nova para consultar estatísticas e calcular sua curva.</p>
+</div>
+<div hidden="" id="station-details">
+<div class="breadcrumb">SHC / Curvas de Permanência</div>
+<div class="title-row">
+<div>
+<h1 id="station-title">
+</h1>
+<span class="muted" id="station-code">
+</span>
+</div>
+<div class="station-actions">
+<button class="secondary" id="edit-station">Editar estação</button>
+<button class="secondary" id="refresh">↻ Atualizar observações</button>
+</div>
+</div>
+<div class="metadata">
+<span id="source-label">
+</span>
+<span id="method-label">
+</span>
+<span id="period-label">
+</span>
+</div>
+<article class="chart-card">
+<div class="chart-heading">
+<div>
+<h2>Cotas anuais e referências históricas</h2>
+<p>Curva histórica salva e observações dos três últimos anos.</p>
+</div>
+<a class="button secondary" id="download">↓ Baixar PNG</a>
+</div>
+<fieldset class="chart-switch" aria-label="Visualização do gráfico">
+<legend>Visualização</legend>
+<label><input type="radio" name="chart-mode" value="plotly" checked> Interativo (Plotly)</label>
+<label><input type="radio" name="chart-mode" value="matplotlib"> Imagem (Matplotlib)</label>
+</fieldset>
+<p id="interactive-loading" class="small muted" role="status" hidden>Carregando gráfico interativo…</p>
+<div id="interactive-chart" role="region" aria-label="Gráfico interativo de cotas"></div>
+<img alt="Gráfico anual de cotas da estação selecionada" id="chart" hidden/>
+<p class="image-note">
+</p>
+</article>
+<article class="card limits">
+<div class="head">
+<div>
+<h2>Limites de referência</h2>
+<p class="muted" style="margin:0">Edite os nomes e os valores em centímetros.</p>
+</div>
+<button class="quiet" id="add-limit">+ Adicionar limite</button>
+</div>
+<table class="limit-table">
+<thead>
+<tr>
+<th>Nome do limite</th>
+<th>Cota (cm)</th>
+<th>
+<span class="small">Remover</span>
+</th>
+</tr>
+</thead>
+<tbody id="limit-rows">
+</tbody>
+</table>
+<div class="limits-footer">
+<span id="save-note">As alterações salvas serão compartilhadas com toda a equipe.</span>
+<button id="save-limits">Salvar limites</button>
+</div>
+</article>
+</div>
+</div>
+</section>
+<dialog aria-labelledby="insert-title" id="insert-dialog">
+<div class="dialog-head">
+<div>
+<p class="muted small" style="margin-bottom:6px">CURVAS DE PERMANÊNCIA</p>
+<h2 id="insert-title">Inserir nova estação</h2>
+</div>
+<button aria-label="Fechar" class="quiet" id="close-dialog">✕</button>
+</div>
+<p id="insert-error" class="notice" role="alert" hidden>
+</p>
+<ol aria-label="Etapas de inserção" class="steps">
+<li class="active" id="consult-step-label">1 · Consultar estação</li>
+<li id="review-step-label">2 · Revisar e calcular</li>
+</ol>
+<section id="consult-step">
+<form id="consult-form">
+<div class="consult-row">
+<div>
+<label for="new-code">Código da estação</label>
+<input id="new-code" min="1" placeholder="Ex.: 14558000" required="" step="1" type="number"/>
+</div>
+<button type="submit">Consultar estatísticas</button>
+</div>
+</form>
+<div class="dialog-help">Primeiro carregamos as séries e suas estatísticas. Com essas informações, você poderá escolher o método e informar correções pontuais antes de calcular a curva.</div>
+<p class="small muted">A consulta das séries pode levar alguns minutos. Nenhum resultado é salvo nesta etapa.</p>
+
+<div class="dialog-actions">
+<button class="secondary" id="cancel-insert" type="button">Cancelar</button>
+</div>
+</section>
+<section hidden="" id="review-step">
+<div class="review-heading">
+<div>
+<h3 class="review-station-title" id="review-name">Estação</h3>
+<span class="review-code" id="review-code">
+</span>
+</div>
+<button class="quiet" id="change-code" type="button">Alterar código</button>
+</div>
+<div class="dialog-help" hidden="" id="existing-station-notice">Esta estação já está cadastrada. Abra a curva existente sem recalcular os resultados.</div>
+<h3 style="margin:20px 0 0">Estatísticas das séries</h3>
+<div class="stats-scroll">
+<table class="stats-table">
+<thead>
+<tr>
+<th rowspan="2">Código</th>
+<th rowspan="2">Fonte</th>
+<th colspan="6">Cota (cm)</th>
+<th colspan="6">Vazão (m³/s)</th>
+</tr>
+<tr>
+<th>Início</th>
+<th>Fim</th>
+<th>Anos</th>
+<th>Falhas (%)</th>
+<th>Consist. (%)</th>
+<th>Anos efet.</th>
+<th>Início</th>
+<th>Fim</th>
+<th>Anos</th>
+<th>Falhas (%)</th>
+<th>Consist. (%)</th>
+<th>Anos efet.</th>
+</tr>
+</thead>
+<tbody id="stats-rows">
+</tbody>
+</table>
+</div>
+<p class="small muted">Estatísticas originais por fonte e variável, antes da combinação das fontes e das correções pontuais.</p>
+<form id="review-form">
+<fieldset id="calculation-settings">
+<section class="review-section">
+<h3>Método de cálculo</h3>
+<p class="muted small">Escolha o método com base na cobertura e na qualidade das séries.</p>
+<div class="method-options">
+<label class="method-option">
+<input checked="" name="calculation-method" type="radio" value="from_discharge"/>
+<div>
+<strong>A partir da vazão <em>PADRÃO</em>
+</strong>
+<span>Usa as estatísticas de vazão e a curva-chave para obter as cotas.</span>
+</div>
+</label>
+<label class="method-option">
+<input name="calculation-method" type="radio" value="direct"/>
+<div>
+<strong>Diretamente das cotas</strong>
+<span>Calcula as estatísticas usando as cotas observadas.</span>
+</div>
+</label>
+</div>
+<p class="small muted" id="method-policy">Se a série de vazão ou a curva-chave não permitirem esse cálculo, a SHC poderá usar cotas diretas. O resultado informará o método efetivamente utilizado.</p>
+</section>
+<section class="review-section">
+<div class="review-heading">
+<div>
+<h3>Correções pontuais <span class="muted small">· opcional</span>
+</h3>
+<p class="small muted">Substitua valores de dias específicos na série final, sem alterar o banco de dados.</p>
+</div>
+<button class="quiet" id="add-sanitization" type="button">+ Adicionar correção</button>
+</div>
+<div class="sanitization-scroll">
+<table class="sanitization-table">
+<thead>
+<tr>
+<th>Variável</th>
+<th>Data</th>
+<th>Valor substituto</th>
+<th>Remover</th>
+</tr>
+</thead>
+<tbody id="sanitization-rows">
+</tbody>
+</table>
+</div>
+<p class="small muted" id="no-sanitization">Nenhuma correção informada.</p>
+<p class="small muted">As correções substituem valores em datas já existentes após a combinação das fontes. Cotas em cm e vazões em m³/s. Não são preenchimento de lacunas nem exclusão de observações.</p>
+<details>
+<summary>Ver o formato das correções</summary>
+<pre id="sanitization-preview">{}</pre>
+</details>
+</section>
+<section class="review-section">
+<div class="review-heading">
+<div>
+<h3>Limites iniciais <span class="muted small">· opcional</span>
+</h3>
+<p class="small muted">Referências em centímetros, editáveis depois da inserção.</p>
+</div>
+<button class="quiet" id="new-add-limit" type="button">+ Adicionar limite</button>
+</div>
+<table class="limit-table">
+<thead>
+<tr>
+<th>Nome do limite</th>
+<th>Cota (cm)</th>
+<th>Remover</th>
+</tr>
+</thead>
+<tbody id="new-limits">
+</tbody>
+</table>
+</section>
+</fieldset>
+<div class="dialog-actions">
+<button class="secondary" id="back-to-code" type="button">Voltar</button>
+<button id="calculate-insert" type="submit">Calcular e inserir</button>
+</div>
+</form>
+</section>
+<section hidden="" id="insert-progress">
+<h3 id="calculation-phase">Processando estação…</h3>
+<p class="small muted" id="calculation-summary">
+</p>
+<progress aria-label="Cálculo em andamento" style="width:100%">
+</progress>
+<p class="small muted">Os resultados completos serão publicados na lista após o término do processamento.</p>
+<button class="secondary" id="close-progress">Fechar janela</button>
+</section>
+</dialog>
+<script id="station-data" type="application/json">{{ stations|tojson }}</script>
+<script id="operation-data" type="application/json">{{ session.get('active_operation')|tojson }}</script>
+{% endblock %}

@@ -24,6 +24,16 @@ pyproject.toml    # Build config; install with: pip install -e .
 - Python ≥ 3.11
 - Type annotations on **all** function signatures (`from __future__ import annotations`)
 - `ruff` for linting and formatting (line length 100, enforced via `.vscode/settings.json`)
+- Before finishing an iteration, run `ruff format --check` and the full `ruff check`
+  with the repository configuration on every Python file created or modified in that
+  iteration. Do not restrict checks to a subset of rules; fix all new findings before
+  handing off. Report any remaining pre-existing findings that prevent a clean check.
+- Follow enabled Ruff rules while implementing: assign exception messages to a local
+  variable before raising, avoid raising inside a `try` just to catch the exception in
+  that same block, use explicit `strict=` for `zip`, and avoid accessing private members.
+  Use narrowly scoped, explained `noqa` exceptions only for justified existing APIs.
+  Respect the project's configured ignores, including `TRY003` (built-in exceptions
+  remain appropriate for simple code) and `COM812` (conflicts with `ruff format`).
 - `mypy` for static type checking in strict mode
 - Google-style docstrings with `Args:` and `Returns:` sections
 - Every method, including properties and special methods, must have a Google-style
@@ -340,7 +350,7 @@ When a more complex solution genuinely appears necessary, explain why and ask be
 ## Iteration records
 
 Save each distinct work iteration's plan and session record under
-`agents/iterations/<description>_YYYY-MM-DD_HH-MM-SS/plan.md`.
+`agents/iterations/YYYY-MM-DD_HH-MM-SS_<description>/plan.md`.
 Use America/Sao_Paulo local time for the directory's creation timestamp.
 During discussion of the same iteration, overwrite its existing plan.md in place.
 Do not version plans: do not add version numbers to filenames, directory names,

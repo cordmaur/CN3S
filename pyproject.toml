@@ -12,6 +12,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+web = [
+    "flask",
+    "gunicorn",
+    "flask-session>=0.8,<1",
+    "cachelib>=0.13,<1",
+    "pandas",
+    "matplotlib",
+    "tqdm",
+    "geopandas",
+    "sqlalchemy",
+    "pyodbc",
+    "azure-identity",
+    "pyarrow",
+]
 dev = [
     "mypy",
     "ruff",
@@ -27,7 +41,8 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["C901", "ANN401", "RET504", "EXE002", "T201", "D203", "D212", "TRY300", "BLE001", "S608", "S101", "PLR0913", "S301"]
+# TRY003 permits clear built-in exceptions without custom classes; COM812 conflicts with ruff format.
+ignore = ["C901", "ANN401", "RET504", "EXE002", "T201", "D203", "D212", "TRY300", "BLE001", "S608", "S101", "PLR0913", "S301", "TRY003", "COM812"]
 
 [tool.mypy]
 files = [

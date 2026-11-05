@@ -68,6 +68,7 @@ class SqlConnector:
     # Resolve from the source file so every notebook uses the same account and cache.
     AUTH_DIR = Path(__file__).resolve().parents[2] / ".azure-auth"
 
+    print(AUTH_DIR)
     CONNECTION_STRING = """Driver={ODBC Driver 18 for SQL Server};
     Server=synanaprod001-ondemand.sql.azuresynapse.net;
     Database=syndb_hidro;Encrypt=yes;TrustServerCertificate=no;
