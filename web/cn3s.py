@@ -49,7 +49,6 @@ from cn3s.objectives import Objectives
 from hydro.inference import Inference
 from hydro.rainfall import MODEL_NAMES
 from hydro.station import Station
-from hydrography import Hydrography
 from utils.user_sql_connector import UserSqlConnector
 
 bp = Blueprint("cn3s", __name__, url_prefix="/shc/cn3s")
@@ -176,6 +175,42 @@ def selected_calibration(folder: Path, identifier: str) -> Path:
     raise ValueError(msg)
 
 
+def watershed_path(folder: Path) -> Path:
+    """
+    Locate the saved basin in current or historical station folders.
+
+    Args:
+        folder: Prepared station directory.
+
+    Returns:
+        GeoParquet path, preferring the current file when both exist.
+
+    """
+    path = folder / "upstream_watershed.parquet"
+    return path if path.exists() else folder / "watershed.parquet"
+
+
+def station_summary(code: int) -> dict[str, Any]:
+    """
+    Read the published station identity and last daily summary without taking the worker lock.
+
+    Args:
+        code: Historical station code.
+
+    Returns:
+        Station fields, geographic availability and the last completed statistics snapshot.
+
+    """
+    folder = station_folder(code)
+    metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+    path = folder / "overview.json"
+    overview = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    metadata.setdefault("station_name", (overview or {}).get("name") or f"Estação {code}")
+    metadata.setdefault("drainage_area", metadata.get("area_station_km2"))
+    metadata.setdefault("drainage_area_geo", metadata.get("area_nuareacont_km2"))
+    return {"metadata": metadata, "overview": overview, "basin": watershed_path(folder).exists()}
+
+
 def station_info(code: int) -> dict[str, Any]:
     """
     Inspect station metadata and monthly coverage without SQL or rainfall downloads.
@@ -188,7 +223,6 @@ def station_info(code: int) -> dict[str, Any]:
 
     """
     folder = station_folder(code)
-    metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
     rows: dict[str, Any] = {}
     for name in ("rain", "discharge"):
         path = folder / "Monthly" / f"{name}.parquet"
@@ -202,10 +236,7 @@ def station_info(code: int) -> dict[str, Any]:
                 "preview": table(frame),
             }
     return {
-        "metadata": metadata,
-        "overview": json.loads((folder / "overview.json").read_text(encoding="utf-8"))
-        if (folder / "overview.json").exists()
-        else None,
+        **station_summary(code),
         "states_available": Path(current_app.config["SHC_STATES_PATH"]).exists(),
         "series": rows,
         "basin": (folder / "upstream_watershed.parquet").exists(),
@@ -260,19 +291,21 @@ def cycles() -> list[dict[str, Any]]:
     return rows
 
 
-def progress(job_id: str, phase: str) -> None:
+def progress(job_id: str, phase: str, completed: int = 0) -> None:
     """
     Record an operation phase without exposing credentials or estimating completion.
 
     Args:
         job_id: Opaque operation identifier tied to the initiating login.
         phase: Human-readable processing phase.
+        completed: Completed preparation stages.
 
     """
     cache = current_app.config["SESSION_CACHELIB"]
     job = cache.get("cn3s:" + job_id)
     if job:
         job["phase"] = phase
+        job["completed_steps"] = completed
         cache.set("cn3s:" + job_id, job, timeout=TTL)
 
 
@@ -620,7 +653,43 @@ def calibrate(code: int, payload: dict[str, Any], job_id: str) -> dict[str, Any]
     }
 
 
-def prepare_overview(code: int, token: str, kind: str, temporary: str) -> Station:
+def inventory_fields(station: Station) -> dict[str, Any]:
+    """
+    Read Hidro location labels and serialize the inventory for the station card.
+
+    Args:
+        station: Historical station with an authenticated Hidro inventory row.
+
+    Returns:
+        Inventory, municipality, UF, river, and observed coordinates in decimal degrees.
+
+    """
+    location = station.hidro.read(
+        "SELECT m.Nome AS city, e.Sigla AS uf, r.Nome AS river "
+        "FROM hidro.estacao AS s "
+        "LEFT JOIN hidro.municipio AS m ON m.Codigo = s.MunicipioCodigo "
+        "LEFT JOIN hidro.estado AS e ON e.Codigo = s.EstadoCodigo "
+        "LEFT JOIN hidro.rio AS r ON r.Codigo = s.RioCodigo "
+        "WHERE s.Codigo = :code",
+        {"code": station.code},
+    ).iloc[0]
+    # SQL returns geom_wkb as binary. Use lossless hex in the complete inventory.
+    row = station.info.iloc[0].map(
+        lambda value: "0x" + bytes(value).hex()
+        if isinstance(value, (bytes, bytearray, memoryview))
+        else value
+    )
+    inventory = json.loads(row.to_json(date_format="iso"))
+    return {
+        "name": station.name,
+        "inventory": inventory,
+        "latitude": inventory["Latitude"],
+        "longitude": inventory["Longitude"],
+        **json.loads(location.to_json()),
+    }
+
+
+def prepare_overview(code: int, token: str, kind: str, temporary: str, job_id: str) -> Station:
     """
     Stage station geometry and a snapshot of complete per-source daily statistics.
 
@@ -628,7 +697,8 @@ def prepare_overview(code: int, token: str, kind: str, temporary: str) -> Statio
         code: Historical ANA station code.
         token: Initiating user's delegated SQL token, used only for the query.
         kind: Prepare a new station or refresh an existing overview.
-        temporary: Staging directory; caller publishes only after successful queries.
+        temporary: Staging directory on the station filesystem for atomic publication.
+        job_id: Identifier for publishing progress.
 
     Returns:
         Station with staged files and coordinates in geographic degrees.
@@ -636,30 +706,44 @@ def prepare_overview(code: int, token: str, kind: str, temporary: str) -> Statio
     """
     network = Path(current_app.config["SHC_HYDROGRAPHY_DIR"])
 
-    conn = UserSqlConnector(token, cache=current_app.extensions["shc_sql_cache"])
+    # Manual refresh reads the sources again and seeds the cache for later consumers.
+    conn = UserSqlConnector(
+        token, cache=current_app.extensions["shc_sql_cache"], use_cache=kind != "overview"
+    )
     try:
+        progress(job_id, "Consultando inventário…")
         station = Station(code, connector=conn)
+        fields = inventory_fields(station)
         if kind == "prepare":
-            hydrography = Hydrography(
-                watersheds_path=network / "geoft_bho_2017_5k_area_drenagem.parquet",
-                reaches_path=network / "geoft_bho_2017_5k_trecho_drenagem.parquet",
+            progress(job_id, "Preparando bacia contribuinte…", 1)
+            station.prepare_station(
+                network / "geoft_bho_2017_50k_area_drenagem.parquet", output_dir=temporary
             )
-            station.prepare_station(hydrography, output_dir=temporary)
         else:
             station.station_dir = Path(temporary) / str(code)
             station.station_dir.mkdir()
-        # Preserve original per-source statistics instead of monthly merged coverage.
+        snapshot = station.station_dir / "overview.json"
+        if kind == "overview":
+            # Publish the inventory before the slower daily queries. Keep the timestamp
+            # and values of the last successful series refresh if observations fail.
+            destination = station_folder(code) / "overview.json"
+            previous = (
+                json.loads(destination.read_text(encoding="utf-8")) if destination.exists() else {}
+            )
+            snapshot.write_text(
+                json.dumps(previous | fields, ensure_ascii=False, allow_nan=False), encoding="utf-8"
+            )
+            snapshot.replace(destination)
+        progress(job_id, "Consultando séries de cota e vazão…", 2)
         station.load_series()
-        inventory = station.info.iloc[0]
         overview = {
+            **fields,
             "updated_at": datetime.now(ZoneInfo("America/Sao_Paulo")).isoformat(),
-            "latitude": float(inventory["Latitude"]),
-            "longitude": float(inventory["Longitude"]),
             "columns": [list(column) for column in station.stats.columns],
             "index": station.stats.index.tolist(),
             "data": json.loads(station.stats.to_json(orient="values")),
         }
-        (station.station_dir / "overview.json").write_text(
+        snapshot.write_text(
             json.dumps(overview, ensure_ascii=False, allow_nan=False), encoding="utf-8"
         )
     finally:
@@ -667,7 +751,9 @@ def prepare_overview(code: int, token: str, kind: str, temporary: str) -> Statio
     return station
 
 
-def prepare(code: int, payload: dict[str, Any], token: str, kind: str) -> dict[str, Any]:
+def prepare(
+    code: int, payload: dict[str, Any], token: str, kind: str, job_id: str
+) -> dict[str, Any]:
     """
     Prepare geometry or monthly series, staging completed files before replacement.
 
@@ -676,6 +762,7 @@ def prepare(code: int, payload: dict[str, Any], token: str, kind: str) -> dict[s
         payload: Submitted monthly configuration; numerical units follow the notebook APIs.
         token: Delegated Azure SQL token of the initiating user; never persisted in results.
         kind: Requested operation or artifact name from the fixed route choices.
+        job_id: Identifier for reporting preparation progress.
 
     Returns:
         Written file names and a reminder to review dependent calibrations.
@@ -691,12 +778,11 @@ def prepare(code: int, payload: dict[str, Any], token: str, kind: str) -> dict[s
     if kind == "inputs" and payload.get("replace") is not True:
         msg = "Confirme na página a substituição dos arquivos indicados."
         raise ValueError(msg)
-    with tempfile.TemporaryDirectory() as temporary:
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=folder.parent) as temporary:
         if kind in {"prepare", "overview"}:
-            station = prepare_overview(code, token, kind, temporary)
-            files = ["overview.json"]
-            if kind == "prepare":
-                files += ["metadata.json", "upstream_watershed.parquet"]
+            station = prepare_overview(code, token, kind, temporary, job_id)
+            name = "overview.json"
         else:
             station = Station.from_folder(folder)
             station.station_dir = Path(temporary) / str(code)
@@ -727,14 +813,18 @@ def prepare(code: int, payload: dict[str, Any], token: str, kind: str) -> dict[s
             else:
                 msg = "Selecione chuva ou vazão."
                 raise ValueError(msg)
-            files = [f"Monthly/{series}.parquet"]
-        for name in files:
+            name = f"Monthly/{series}.parquet"
+        files = [name]
+        if kind == "prepare":
+            # Publish geometry, metadata and observations in one filesystem operation.
+            progress(job_id, "Salvando estação…", 3)
+            station.station_dir.rename(folder)
+            files.extend(["metadata.json", "upstream_watershed.parquet"])
+        else:
             destination = folder / name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            # A same-directory temporary file makes replacement atomic for each artifact.
-            with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as staged:
-                staged.write((station.station_dir / name).read_bytes())
-            Path(staged.name).replace(destination)
+            # Both paths share a filesystem, so readers always see a complete snapshot.
+            (station.station_dir / name).replace(destination)
     return {
         "summary": {"files": files},
         "artifacts": {},
@@ -769,7 +859,7 @@ def run_operation(
             elif kind == "calibrate":
                 result = calibrate(code, payload, job_id)
             else:
-                result = prepare(code, payload, token, kind)
+                result = prepare(code, payload, token, kind, job_id)
             job.update(status="completed", result=result)
         except Exception as exc:
             app.logger.exception("CN3S operation failed: %s", kind)
@@ -781,6 +871,7 @@ def run_operation(
                     "e o registro do servidor."
                 )
             )
+            job = cache.get("cn3s:" + job_id) or job
             job.update(status="failed", error=message)
         finally:
             job["elapsed_seconds"] = time.time() - job["started"]
@@ -805,8 +896,13 @@ def index(step: str) -> str:
     for path in sorted((data_root() / "stations").glob("*/metadata.json")):
         if path.parent.name.isdecimal():
             try:
+                code = int(path.parent.name)
                 metadata = json.loads(path.read_text(encoding="utf-8"))
-                stations.append({"code": int(path.parent.name), "name": metadata["station_name"]})
+                name = (
+                    metadata.get("station_name")
+                    or station_summary(code)["metadata"]["station_name"]
+                )
+                stations.append({"code": code, "name": name})
             except (OSError, ValueError, KeyError):
                 stations.append({"code": int(path.parent.name), "name": "Metadados inválidos"})
     return render_template(
@@ -833,6 +929,12 @@ def station_route(code: int) -> Response | tuple[Response, int]:
         Readiness JSON or a clear data/concurrency error.
 
     """
+    if request.args.get("view") == "station":
+        # Geometry is immutable and overview.json is replaced atomically.
+        try:
+            return jsonify(station_summary(code))
+        except (OSError, ValueError) as exc:
+            return jsonify(error=f"Ficha indisponível: {exc}"), 400
     lock = current_app.extensions["cn3s_lock"]
     if not lock.acquire(blocking=False):
         return jsonify(error="Aguarde a operação CN3S terminar."), 409
@@ -862,52 +964,64 @@ def cycles_route() -> Response | tuple[Response, int]:
         lock.release()
 
 
-def basin_image(station: Station, overview: dict[str, Any] | None) -> bytes:
+def basin_image(code: int, overview: dict[str, Any] | None) -> bytes:
     """
-    Render a loaded basin over IBGE states in geographic coordinates (EPSG:4326).
+    Draw the saved basin over IBGE boundaries with a national locator.
 
     Args:
-        station: Station snapshot containing the saved watershed geometry.
-        overview: Saved inventory coordinates in decimal degrees, when available.
+        code: Historical station code.
+        overview: Last inventory snapshot with coordinates in decimal degrees.
 
     Returns:
-        PNG image with state boundaries, abbreviations and the station location.
+        PNG in geographic coordinates (EPSG:4326).
 
     """
     with current_app.extensions["shc_render_lock"]:
-        figure = Figure(figsize=(7, 5))
-        axis = figure.subplots()
-        basin = station.upstream_watershed.to_crs(4326)
+        figure = Figure(figsize=(7, 4.4))
+        axis = figure.add_axes((0, 0, 1, 1))
+        basin = gpd.read_parquet(watershed_path(station_folder(code))).to_crs(4326)
         xmin, ymin, xmax, ymax = basin.total_bounds
-        padding = max(xmax - xmin, ymax - ymin) * 0.15 + 0.2
+        padding = max(xmax - xmin, ymax - ymin) * 0.12
+        extent = box(xmin - padding, ymin - padding, xmax + padding, ymax + padding)
+        # The bundled generalized IBGE layer also works without a shapefile driver.
+        bundled = Path(__file__).parent / "static/br-uf-2022.geojson"
+        national = gpd.GeoDataFrame.from_features(
+            json.loads(bundled.read_text())["features"], crs=4326
+        )
+        regional = national
         states_path = Path(current_app.config["SHC_STATES_PATH"])
         if states_path.exists():
-            states = gpd.read_file(states_path).to_crs(4326)
-            states = states.cx[xmin - padding : xmax + padding, ymin - padding : ymax + padding]
-            states.plot(ax=axis, facecolor="#f5f5f0", edgecolor="#888", linewidth=0.6)
-            if "SIGLA_UF" in states:
-                for _, state in states.iterrows():
-                    point = state.geometry.intersection(
-                        box(xmin - padding, ymin - padding, xmax + padding, ymax + padding)
-                    ).representative_point()
-                    axis.text(point.x, point.y, str(state["SIGLA_UF"]), color="#666", fontsize=8)
-        basin.plot(ax=axis, facecolor="#deedf4", edgecolor="#286386", alpha=0.8)
-        if overview is not None:
-            axis.scatter(
-                overview["longitude"],
-                overview["latitude"],
-                color="#b43f32",
-                edgecolor="white",
-                zorder=5,
-                label="Estação",
-            )
-            axis.legend(loc="lower left")
-        axis.set_xlim(xmin - padding, xmax + padding)
-        axis.set_ylim(ymin - padding, ymax + padding)
-        axis.set_title(f"{station.name} ({station.code}) — bacia contribuinte")
+            try:
+                regional = gpd.read_file(states_path).to_crs(4326)
+            except (ImportError, OSError, ValueError):
+                current_app.logger.warning("Usando limites estaduais simplificados do IBGE.")
+        regional = regional.cx[
+            extent.bounds[0] : extent.bounds[2], extent.bounds[1] : extent.bounds[3]
+        ]
+        if not regional.empty:
+            regional.plot(ax=axis, facecolor="#f2f2ea", edgecolor="#adb9b3", linewidth=0.6)
+        basin.plot(ax=axis, facecolor="#a4d7d2", edgecolor="#197977", linewidth=1)
+        if "SIGLA_UF" in regional:
+            for _, state in regional.iterrows():
+                part = state.geometry.intersection(extent)
+                if part.area > extent.area * 0.04:
+                    point = part.representative_point()
+                    axis.text(point.x, point.y, str(state["SIGLA_UF"]), color="#576b65", fontsize=8)
+        axis.set_xlim(extent.bounds[0], extent.bounds[2])
+        axis.set_ylim(extent.bounds[1], extent.bounds[3])
         axis.set_axis_off()
+        inset = figure.add_axes((0.025, 0.035, 0.18, 0.31))
+        national.plot(ax=inset, facecolor="#dce6e0", edgecolor="#9eafa7", linewidth=0.3)
+        inset.set(xticks=[], yticks=[])
+        x, y = (overview or {}).get("longitude"), (overview or {}).get("latitude")
+        if x is not None and y is not None:
+            axis.scatter(float(x), float(y), color="#a84725", edgecolor="white", zorder=5)
+            inset.scatter(float(x), float(y), color="#a84725", s=10)
+        else:
+            # Locate the basin itself until observed station coordinates are available.
+            inset.plot(*extent.exterior.xy, color="#197977", linewidth=1)
         image = io.BytesIO()
-        figure.savefig(image, format="png", bbox_inches="tight")
+        figure.savefig(image, format="png")
         return image.getvalue()
 
 
@@ -938,14 +1052,13 @@ def station_artifact(code: int, kind: str) -> Response:
     else:
         # Existing geometry is never overwritten here, and overview replacement is atomic.
         # Map reads must not reserve the operation lock or prevent station selection.
-        station = Station.from_folder(station_folder(code))
         overview_path = station_folder(code) / "overview.json"
         overview = (
             json.loads(overview_path.read_text(encoding="utf-8"))
             if overview_path.exists()
             else None
         )
-        contents = basin_image(station, overview)
+        contents = basin_image(code, overview)
     return send_file(
         io.BytesIO(contents),
         mimetype="image/png" if kind.endswith("png") else "text/csv",

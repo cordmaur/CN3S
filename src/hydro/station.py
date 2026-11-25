@@ -144,19 +144,20 @@ class Station:
 
     def prepare_station(
         self,
-        hydrography: Hydrography,
+        hydrography: Hydrography | str | Path,
         output_dir: str | Path,
     ) -> dict[str, str | float | None]:
         """
         Assign a basin and save station metadata and upstream basin GeoParquet.
 
         Args:
-            hydrography: Loaded network accepting EPSG:4326 latitude/longitude.
+            hydrography: BHO drainage-area GeoParquet path or a loaded network.
             output_dir: Parent stations directory; a code-named subfolder is created.
 
         Returns:
             Station identity and cobacia, with drainage_area from Hidro AreaDrenagem
-            and drainage_area_geo from geographic nuareamont, both in km².
+            and drainage_area_geo from upstream contribution areas (or the loaded
+            network's nuareamont), both in km².
             Missing inventory area is represented by None.
 
         """
@@ -170,9 +171,15 @@ class Station:
         inventory = self.info.iloc[0]
         lat = float(inventory["Latitude"])
         lon = float(inventory["Longitude"])
-        cobacia = hydrography.assign_cobacia(lat, lon)
-        drainage_area_geo = hydrography.drainage_area(cobacia)
-        watershed = hydrography.upstream_watershed(cobacia)
+        if isinstance(hydrography, (str, Path)):
+            # Keep GIS dependencies local to spatial preparation.
+            from hydrography.watershed import delineate_watershed  # noqa: PLC0415
+
+            cobacia, drainage_area_geo, watershed = delineate_watershed(hydrography, lat, lon)
+        else:
+            cobacia = hydrography.assign_cobacia(lat, lon)
+            drainage_area_geo = hydrography.drainage_area(cobacia)
+            watershed = hydrography.upstream_watershed(cobacia)
 
         # Preserve both sources: inventory and geographic areas can differ.
         inventory_area = inventory["AreaDrenagem"]

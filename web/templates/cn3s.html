@@ -14,8 +14,11 @@
 <nav class="cn-section-nav" aria-label="Etapas CN3S">{% for key, label in [('estacao', 'Estação'), ('calibrar', 'Calibrar Estação'), ('previsao', 'Previsão')] %}<a href="{{ url_for('cn3s.index', step=key) }}" {% if step == key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav>
 <div id="cn-controls">
 <section class="card"><h2>{{ title }}</h2>
-<label for="cn-station">Visualizar estação</label>
+<label for="cn-station">Selecionar estação</label>
+<div class="cn-selector">
 <select id="cn-station"><option value="">Selecione uma estação</option>{% for station in stations %}<option value="{{ station.code }}">{{ station.name }} · {{ station.code }}</option>{% endfor %}</select>
+{% if step == 'estacao' %}<button type="button" id="cn-add">Adicionar estação</button>{% endif %}
+</div>
 <div id="cn-station-info" class="cn-summary">Selecione uma estação para visualizar os dados.</div>
 </section>
 {% include 'cn3s_' ~ step ~ '.html' %}

@@ -23,7 +23,7 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: ${SHC_HYDROGRAPHY_HOST_DIR:?Defina a pasta BHO no host}
+        source: ${SHC_HYDROGRAPHY_HOST_DIR:?Defina a pasta BHO_2017_50k no host}
         target: /data/hydrography
         read_only: true
         bind:

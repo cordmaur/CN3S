@@ -383,8 +383,7 @@ após a conclusão. Alterar a configuração invalida as figuras na página.
 
 `SHC_CN3S_DATA_DIR` aponta para uma pasta com `stations/`, `forecasts/` e
 `downloads/` (padrão `/data/CN3S`). `SHC_HYDROGRAPHY_DIR` aponta para a pasta BHO
-2017 com `geoft_bho_2017_5k_area_drenagem.parquet` e
-`geoft_bho_2017_5k_trecho_drenagem.parquet`. A hidrografia só é lida ao preparar
+2017 50k com `geoft_bho_2017_50k_area_drenagem.parquet`. A hidrografia só é lida ao preparar
 uma bacia. As séries salvas e os forecasts podem ser inspecionados sem SQL.
 
 Instale o extra `web` no ambiente Python usado pelo servidor:
@@ -411,7 +410,7 @@ executado no host/WSL, com caminhos do host e diretórios já existentes:
 ```bash
 export SHC_CN3S_HOST_DIR='/caminho/CN3S-poc'
 export SHC_FORECASTS_HOST_DIR='/caminho/CN3S/forecasts'
-export SHC_HYDROGRAPHY_HOST_DIR='/caminho/BHO_2017_5k'
+export SHC_HYDROGRAPHY_HOST_DIR='/data/Geospatial_BR_Data/Hidrografia/BHO_2017_50k'
 export SHC_STATES_HOST_DIR='/caminho/BR_UF_2022'
 export SHC_CODE_REVISION="$(git rev-parse HEAD)"
 
@@ -438,19 +437,31 @@ trabalho simultaneamente.
 
 O CN3S agora tem três páginas: **Estação** (`/shc/cn3s`), **Calibrar Estação**
 (`/shc/cn3s/calibrar`) e **Previsão** (`/shc/cn3s/previsao`). A seleção da estação
-acompanha a navegação. Criar Estação consulta o inventário, prepara a bacia e salva
-`overview.json` com coordenadas e `station.stats` completos (cota/vazão, Hidro e
-Telemetria separados). A criação não substitui estações existentes. Para estações
-já preparadas, **Atualizar estatísticas** cria/atualiza esse resumo sem alterar a
-bacia, os dados mensais ou as calibrações. Visualizar os dados salvos não consulta SQL.
-A chuva/vazão mensal e a calibração ficam na segunda página; a previsão mantém as
-convenções científicas anteriores. Uma falha na consulta inicial não publica os
-arquivos da nova estação.
+acompanha a navegação. Na página Estação, selecionar um código abre a ficha e a
+bacia e lê as estatísticas de `overview.json` com sua data de atualização.
+**Atualizar estatísticas** consulta as fontes com a conta SQL conectada, substitui
+o resumo ao concluir e renova as entradas das consultas no cache SQL. O cadastro
+e as leituras posteriores reutilizam o cache do conector para consultas idênticas.
+Município, UF e rio vêm dos códigos do inventário Hidro e das tabelas
+`municipio`, `estado` e `rio`. Latitude e longitude vêm de `estacao`, em
+graus decimais. A ficha aparece assim que o inventário chega. Uma barra de
+atividade acompanha a consulta diária. Durante a consulta, ou em caso de falha,
+o último resumo disponível mantém a data de atualização. Cota e vazão são apresentadas por fonte e código de série.
+**Adicionar estação** abre o diálogo de cadastro. O servidor consulta o inventário,
+prepara a bacia e salva o resumo em `overview.json`. Após a publicação da pasta, a
+nova estação passa a ser a seleção atual. O cadastro lê somente os polígonos de drenagem da BHO 2017 50k.
+A área hidrográfica é a soma de `nuareacont` (km²) dos polígonos a montante,
+incluindo o do exutório. A camada nacional sai de escopo após a delimitação.
+A chuva/vazão mensal e a calibração ficam
+na segunda página.
 
 Para desenhar estados no mapa, configure `SHC_STATES_PATH` com o shapefile IBGE
 (padrão local `/data/Geospatial_BR_Data/BR_UF_2022/BR_UF_2022.shp`). Na sobreposição
 Compose CN3S, defina `SHC_STATES_HOST_DIR` como a pasta contendo todos os arquivos
 `.shp`, `.shx`, `.dbf` e `.prj` de `BR_UF_2022`; ela será montada somente para leitura.
-O mapa reprojeta bacia e estados para EPSG:4326. Se o arquivo não estiver montado,
-a página informa a ausência e continua mostrando a bacia. As coordenadas da estação
-ficam disponíveis após criar ou atualizar o resumo com acesso SQL.
+O mapa reprojeta bacia e estados para EPSG:4326. O localizador nacional e o fundo
+alternativo usam `web/static/br-uf-2022.geojson`, derivado da malha estadual
+BR_UF_2022 do IBGE, simplificada em 0,045° com coordenadas arredondadas a 0,001°.
+O fundo alternativo entra quando o shapefile configurado está ausente ou ilegível.
+O painel regional usa a geometria original da bacia. O
+marcador é exibido quando o inventário fornece as coordenadas da estação.

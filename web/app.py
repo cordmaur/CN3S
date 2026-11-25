@@ -59,7 +59,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         SHC_HYDROGRAPHY_DIR=Path(
             os.environ.get(
                 "SHC_HYDROGRAPHY_DIR",
-                "/data/Geospatial_BR_Data/Hidrografia/BHO_2017_5k",
+                "/data/Geospatial_BR_Data/Hidrografia/BHO_2017_50k",
             )
         ),
         SHC_CODE_REVISION=os.environ.get("SHC_CODE_REVISION", ""),

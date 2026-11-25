@@ -1,15 +1,32 @@
-<section class="card">
-<h2>Criar Estação</h2>
-<p>Informe o código ANA para criar a bacia contribuinte, os metadados e o resumo das séries de cota e vazão.</p>
-<div class="cn-fields"><label>Código ANA<input id="cn-code" type="number" min="1" step="1" placeholder="29050000"></label></div>
-<button id="cn-prepare" type="button" disabled>Criar Estação</button>
-<p class="muted">A criação consulta o inventário e as séries Hidro/Telemetria. A chuva mensal e a calibração são preparadas em Calibrar Estação.</p>
-</section>
-<section class="card"><h2>Visão geral da estação</h2>
-<img id="cn-basin" class="cn-result-image" alt="Estação e bacia contribuinte sobre os estados brasileiros" hidden>
-<p id="cn-map-note" class="muted"></p>
-<h3>Séries hidrológicas</h3>
-<p class="muted">Estatísticas dos registros diários por fonte, antes da combinação das séries. Cota em cm; vazão em m³/s. Anos efetivos descontam as falhas; consistência indica registros consolidados.</p>
-<div id="cn-stats"></div>
-<button id="cn-refresh" type="button" disabled>Atualizar estatísticas</button>
-</section>
+<div id="cn-details" hidden>
+  <div class="cn-station-grid">
+    <section class="card"><h2 id="cn-name"></h2><dl id="cn-fields"></dl>
+      <details id="cn-inventory" hidden><summary>Inventário completo</summary><dl id="cn-inventory-fields"></dl></details>
+    </section>
+    <figure class="card cn-map">
+      <h2>Bacia contribuinte</h2><div id="cn-map"></div><p class="muted" id="cn-map-note" role="status"></p>
+      <figcaption><span class="cn-swatch"></span> Bacia <span id="cn-marker"><i></i> Estação</span> · Limites estaduais do IBGE, 2022</figcaption>
+    </figure>
+  </div>
+  <section class="card">
+    <h2>Séries hidrológicas</h2><p class="muted" id="cn-status" role="status"></p>
+    <button type="button" id="cn-refresh">Atualizar estatísticas</button>
+    <progress id="cn-series-progress" aria-label="Atualizando séries hidrológicas" hidden></progress>
+    <div class="cn-actions" aria-label="Variável hidrológica">
+      <button type="button" data-series="cota" aria-pressed="true">Cota (cm)</button>
+      <button type="button" data-series="vazao" aria-pressed="false">Vazão (m³/s)</button>
+    </div>
+    <div id="cn-stats" class="cn-table-wrap"></div>
+    <p class="muted">Cobertura diária por fonte. Anos efetivos descontam as falhas. Consistência é a proporção de registros consolidados no Hidro.</p>
+  </section>
+</div>
+<dialog id="cn-dialog" aria-labelledby="cn-dialog-title">
+  <h2 id="cn-dialog-title">Adicionar estação</h2>
+  <p>A criação prepara a bacia e consulta as séries de cota e vazão.</p>
+  <form id="cn-form">
+    <label for="cn-code">Código ANA</label><input id="cn-code" inputmode="numeric" pattern="[1-9][0-9]*" required autofocus>
+    <p id="cn-phase" role="status"></p><progress id="cn-bar" max="4" value="0" aria-label="Etapas concluídas" hidden></progress>
+    <p id="cn-dialog-error" role="alert"></p>
+    <div class="dialog-actions"><button type="button" class="quiet" id="cn-cancel">Cancelar</button><button id="cn-prepare">Adicionar</button></div>
+  </form>
+</dialog>
