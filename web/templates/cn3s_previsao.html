@@ -1,0 +1,16 @@
+<section class="card"><h2>Calibração selecionada</h2><label for="cn-calibration-select">Parâmetros salvos · somente frequência mensal</label><select id="cn-calibration-select"><option value="">Selecione uma estação primeiro</option></select>
+<div id="cn-calibration-info" class="cn-summary"></div>
+<details><summary>Parâmetros selecionados</summary><dl id="cn-parameter-values" class="cn-fields"></dl></details>
+</section>
+<section class="card" id="cn-rain">
+<h2>Previsão · Chuva prevista</h2>
+<div class="cn-fields"><label>Inicialização CDS<select id="cn-cycle"><option value="">Consultando arquivos…</option></select></label>
+<label>Data de referência<input id="cn-as-of" type="date" value="2026-10-13"></label>
+<label>Meses de chuva<select id="cn-months"></select></label></div>
+<div id="cn-cycle-info" class="cn-summary"></div>
+<details><summary>Modelos e convenções científicas</summary><p>{{ models.values()|join(' · ') }}</p>
+<p>A correção usa a média das razões previsão/hindcast na bacia, multiplicada pela climatologia observada. A mediana entre modelos define um cenário de chuva, não uma mediana de vazão. Os totais CDS brutos equivalem a 30 dias.</p>
+<p>A data de referência seleciona meses; não congela fontes online. Observações recentes podem ser parciais ou estar em cache. Os arquivos CDS são preparados pelo notebook 03.</p></details>
+<p id="cn-ready" class="cn-summary">Selecione estação, calibração e ciclo.</p>
+<button id="cn-run" type="button" disabled>Executar previsão mensal</button>
+</section>

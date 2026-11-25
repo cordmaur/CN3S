@@ -6,6 +6,8 @@
 !src/cn3s/**
 !src/hydro/
 !src/hydro/*.py
+!src/hydrography/
+!src/hydrography/*.py
 !src/utils/
 !src/utils/*.py
 !web/

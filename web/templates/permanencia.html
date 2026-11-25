@@ -17,7 +17,7 @@
 <div class="sidebar-head">
 <h2>Estações <span class="pill" id="station-count">{{ stations|length }}</span>
 </h2>
-<button id="new-station">+ Inserir nova estação</button>
+<button id="new-station" disabled>+ Inserir nova estação</button>
 <label class="small muted" for="search" style="display:block;margin-top:14px">Buscar por nome ou código</label>
 <input class="search" id="search" placeholder="Nome ou código da estação" style="margin-top:5px" type="search"/>
 </div>
@@ -73,10 +73,14 @@
 <div class="head">
 <div>
 <h2>Limites de referência</h2>
-<p class="muted" style="margin:0">Edite os nomes e os valores em centímetros.</p>
+<p class="muted" style="margin:0">Edite os nomes e os valores em centímetros. Valores em branco não são desenhados.</p>
 </div>
 <button class="quiet" id="add-limit">+ Adicionar limite</button>
 </div>
+<fieldset class="reference-options"><legend>Permanências da série completa</legend>
+<label><input type="checkbox" id="reference-95"> C95 — Permanência 95%</label>
+<label><input type="checkbox" id="reference-5"> C5 — Permanência 5%</label>
+</fieldset>
 <table class="limit-table">
 <thead>
 <tr>
@@ -172,7 +176,7 @@
 <form id="review-form">
 <fieldset id="calculation-settings">
 <section class="review-section">
-<h3>Método de cálculo</h3>
+<h3>Referência do gráfico</h3>
 <p class="muted small">Escolha o método com base na cobertura e na qualidade das séries.</p>
 <div class="method-options">
 <label class="method-option">
@@ -180,18 +184,18 @@
 <div>
 <strong>A partir da vazão <em>PADRÃO</em>
 </strong>
-<span>Usa as estatísticas de vazão e a curva-chave para obter as cotas.</span>
+<span>Exibe estatísticas das cotas obtidas pela conversão das observações de vazão.</span>
 </div>
 </label>
 <label class="method-option">
 <input name="calculation-method" type="radio" value="direct"/>
 <div>
 <strong>Diretamente das cotas</strong>
-<span>Calcula as estatísticas usando as cotas observadas.</span>
+<span>Exibe estatísticas das cotas observadas.</span>
 </div>
 </label>
 </div>
-<p class="small muted" id="method-policy">Se a série de vazão ou a curva-chave não permitirem esse cálculo, a SHC poderá usar cotas diretas. O resultado informará o método efetivamente utilizado.</p>
+<p class="small muted" id="method-policy">As três séries são calculadas. Se a cota derivada estiver indisponível, selecione cotas observadas para o gráfico.</p>
 </section>
 <section class="review-section">
 <div class="review-heading">
@@ -232,6 +236,10 @@
 </div>
 <button class="quiet" id="new-add-limit" type="button">+ Adicionar limite</button>
 </div>
+<fieldset class="reference-options"><legend>Permanências da série completa</legend>
+<label><input type="checkbox" id="new-reference-95"> C95 — Permanência 95%</label>
+<label><input type="checkbox" id="new-reference-5"> C5 — Permanência 5%</label>
+</fieldset>
 <table class="limit-table">
 <thead>
 <tr>

@@ -1,123 +1,104 @@
-"""Batch orchestrator for duration-curve computation and reporting."""
+"""Batch calculation, persistence, and export of hydrological references."""
 
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal
 
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.figure import Figure
 from tqdm.auto import tqdm
 
-from .duration_curve import (
-    DurationCurveReporter,
-    DurationCurveResult,
-    Method,
-)
+from .exceedance import ExceedanceAnalysis, ExceedanceResult
 from .hidro import SeriesType, Source
-from .station import Station
 
-ReportFormat: TypeAlias = Literal["html", "pdf", "images"]
+if TYPE_CHECKING:
+    from matplotlib.figure import Figure
+
+    from .station import Station
 
 # Sanitization to be applied to the final series, e.g.:
 # {13990000: {"cota": {"2015-03-01": 1786}, ...}}
 SanitizationList = dict[int, dict[SeriesType, dict[str, float]]]
 
-class Reporter:
-    """Batch orchestrator: computes, persists, loads, and exports duration curves
-    for multiple stations.
 
-    Delegates per-station computation to DurationCurveReporter and persistence
-    to DurationCurveResult. Owns only batch coordination and report generation.
+class Reporter:
+    """
+    Compute, persist, load, and export references for multiple stations.
+
+    Delegates per-station computation to ExceedanceAnalysis and persistence
+    to ExceedanceResult. Owns only batch coordination and report generation.
     """
 
-    def __init__(self, sanitization: SanitizationList | None = None):
-        self.results: dict[int, DurationCurveResult] = {}
+    def __init__(self, sanitization: SanitizationList | None = None) -> None:
+        """
+        Initialize batch storage and optional per-station corrections.
+
+        Args:
+            sanitization: Observation replacements by station, measurement, and date.
+
+        """
+        self.results: dict[int, ExceedanceResult] = {}
         self.errors: dict[int, str] = {}
-        self.sanitization=sanitization if sanitization else {}
+        self.sanitization = sanitization if sanitization else {}
 
-    def results_summary(self) -> pd.DataFrame():
+    def results_summary(self) -> pd.DataFrame:
+        """
+        Combine whole-record statistics for all stations and variables.
+
+        Returns:
+            One row per station with Q/C statistics in flat columns.
+
+        """
         if not self.results:
-            raise ValueError("No results to summarize. Run calculate_duration_curves() first.")
-
-        return pd.DataFrame.from_dict(
-            {
-                code: {
-                    "Nome": result.station_name,
-                    "Descrição": result.description.split(" - ")[0],
-                    "Inicio": result.stats["Inicio"],
-                    "Fim": result.stats["Fim"],
-                    "Anos": result.stats["Anos"],
-                    "Falhas (%)": result.stats["Falhas (%)"],
-                    "Consist (%)": result.stats["Consist (%)"],
-                    "Anos (Efet.)": result.stats["Anos (Efet.)"],
-                    "Metodo": result.method,
-                    "Fonte": result.source,
-                }
-                for code, result in self.results.items()
-            },
-            orient="index",
-        )
-
+            msg = "No results to summarize. Run calculate_exceedances() first."
+            raise ValueError(msg)
+        return pd.concat([result.summary for result in self.results.values()])
 
     # ─── Batch Computation ─────────────────────────────────────────
 
-    def calculate_duration_curves(
-        self,
-        stations: list[int] | tuple[int, ...],
-        series_type: SeriesType = "cota",
-        source: Source | None = None,
-        method: Method = "from_discharge",
+    def calculate_exceedances(
+        self, stations: list[Station], source: Source = "hidro/telemetria"
     ) -> None:
-        """Compute duration curves for a batch of stations.
+        """
+        Calculate all three variables using caller-owned stations/connectors.
 
         Args:
-            stations: Station codes to process.
-            series_type: Target series type ("cota" or "vazao").
-            source: Data source override. If None, each station selects its best.
-            method: Calculation method ("direct" or "from_discharge").
+            stations: Stations containing the intended historical records.
+            source: Historical-first merge policy or an explicit single source.
 
-        Returns:
-            Dictionary mapping station code → DurationCurveResult.
         """
-        for code in tqdm(stations, desc="Computing duration curves"):
-            print(f"Processing station {code}")
+        for station in tqdm(stations, desc="Computing exceedances"):
             try:
-                station = Station(code, self.sanitization.get(code))
-                dcr = DurationCurveReporter(station)
-                dcr.create_duration_curve(
-                    series_type=series_type,
-                    source=source,
-                    method=method,
-                )
-                self.results[code] = dcr.results
-
-            except Exception as e:
-                print(f"Station {code} failed: {e}")
-                self.errors[code] = str(e)
-
+                if station.code in self.sanitization:
+                    station.sanitization = self.sanitization[station.code]
+                analysis = ExceedanceAnalysis(station)
+                self.results[station.code] = analysis.calculate(source=source)
+                self.errors.pop(station.code, None)
+            except Exception as exc:  # noqa: PERF203 — isolate failures by station in a research batch.
+                self.errors[station.code] = str(exc)
 
     # ─── Batch Persistence ─────────────────────────────────────────
 
     def save_all(self, base_path: str | Path) -> Path:
-        """Save all results to subfolders named by station code.
+        """
+        Save each station's complete result in its own subdirectory.
 
-        Structure:
-            base_path/
-            ├── 12345/
-            │   ├── curve.parquet
-            │   ├── stats.parquet
-            │   └── meta.json
-            └── 67890/
-                └── ...
+        Args:
+            base_path: Root directory for scientific tables and metadata.json.
+
+        Returns:
+            Root directory containing the saved stations and any batch errors.
+
         """
         base_path = Path(base_path)
 
         if not self.results:
-            raise ValueError("No results to save. Run calculate_duration_curves() first.")
+            msg = "No results to save. Run calculate_exceedances() first."
+            raise ValueError(msg)
 
         for code, result in self.results.items():
             result.save(base_path / str(code))
@@ -125,19 +106,25 @@ class Reporter:
         # Persist error log if any
         if self.errors:
             errors_path = base_path / "_errors.json"
-            import json
-            errors_path.write_text(
-                json.dumps(self.errors, ensure_ascii=False, indent=2)
-            )
+
+            errors_path.write_text(json.dumps(self.errors, ensure_ascii=False, indent=2))
 
         return base_path
 
     @classmethod
-    def load_all(cls, base_path: str | Path) -> "Reporter":
-        """Reconstruct a Reporter from a folder of saved results.
+    def load_all(cls, base_path: str | Path) -> Reporter:
+        """
+        Reconstruct a Reporter from a folder of saved results.
 
-        Scans all subfolders containing meta.json and loads each as a
-        DurationCurveResult, keyed by EstacaoCodigo from the curve DataFrame.
+        Scans all subfolders containing metadata.json and loads each as a
+        ExceedanceResult, keyed by the station code in metadata.
+
+        Args:
+            base_path: Root directory containing station subdirectories.
+
+        Returns:
+            Batch with loaded results and any per-station loading errors.
+
         """
         base_path = Path(base_path)
         reporter = cls()
@@ -145,11 +132,11 @@ class Reporter:
         for subfolder in sorted(base_path.iterdir()):
             if not subfolder.is_dir():
                 continue
-            if not (subfolder / "meta.json").exists():
+            if not (subfolder / "metadata.json").exists():
                 continue
 
             try:
-                result = DurationCurveResult.load(subfolder)
+                result = ExceedanceResult.load(subfolder)
                 reporter.results[result.station_code] = result
 
             except Exception as e:
@@ -160,72 +147,44 @@ class Reporter:
 
     # ─── Plotting ──────────────────────────────────────────────────
 
-    def plot_station_chart(
-        self,
-        station: int,
-        ax: plt.Axes | None = None,
-    ) -> None:
-        """Plot the duration-curve chart for a single station.
-
-        Works entirely from DurationCurveResult — no Station instance needed.
+    def plot_station_chart(self, station: int, ax: plt.Axes | None = None) -> Figure:
         """
-        if station not in self.results:
-            raise ValueError(
-                f"No results for station {station}. "
-                f"Available: {list(self.results.keys())}"
-            )
+        Plot saved stage climatology without requiring a database.
 
-        result = self.results[station]
-        curve = result.df.copy()
+        Args:
+            station: Saved station code.
+            ax: Optional existing axes.
 
-        # Remove Feb 29 to align annual curves
-        curve["dia"] = curve.index.get_level_values("dia").to_list()
-        curve["mes"] = curve.index.get_level_values("mes").to_list()
-        curve = curve[~((curve["dia"] == 29) & (curve["mes"] == 2))]
+        Returns:
+            Figure suitable for image, PDF, or HTML export.
 
-        curve.index = pd.to_datetime(
-            "2026-" + curve["mes"].astype(str) + "-" + curve["dia"].astype(str)
-        )
-
+        """
         if ax is None:
             fig, ax = plt.subplots(figsize=(15, 5))
         else:
             fig = ax.get_figure()
-
-        curve[["min", "max"]].plot(ax=ax, color=["red", "blue"])
-        curve[["MLT"]].plot(ax=ax, color="lightblue", linestyle="--")
-        ax.fill_between(
-            curve.index, curve["q10"], curve["q90"],
-            color="lightblue", alpha=0.2,
-        )
-
-        # Build title from DurationCurveResult metadata
-        title = f"Estação {result.station_code} - {result.station_name}\n"
-        if "/" in result.method:
-            title += "Permanência de cotas obtidas a partir da vazão\n"
-        else:
-            title += f"Permanência de {result.series_type}\n"
-        title += result.description
-
-        ax.set_title(title)
-        ax.set_xlabel("")
-        ax.set_ylabel("Cota" if result.series_type == "cota" else "Vazão (m³/s)")
-
+        result = self.results[station]
+        result.plot_daily_climatology(ax)
+        for label, value in result.stage_references().items():
+            ax.axhline(value, linestyle="--", label=label)
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=4)
         fig.tight_layout()
-
+        return fig
 
     # ─── Report Export ─────────────────────────────────────────────
 
     def export_report(
         self,
         output_dir: str | Path,
-        report_format: ReportFormat = "html",
+        report_format: str = "html",
         filename: str | None = None,
         image_format: Literal["png", "jpg", "svg"] = "png",
         dpi: int = 150,
+        *,
         close_figures: bool = True,
     ) -> Path:
-        """Export duration-curve charts to a report (HTML, PDF, or images).
+        """
+        Export duration-curve charts to a report (HTML, PDF, or images).
 
         Args:
             output_dir: Directory where the report will be saved.
@@ -237,11 +196,11 @@ class Reporter:
 
         Returns:
             Path to the generated report or image directory.
+
         """
         if not self.results:
-            raise ValueError(
-                "No results to export. Run calculate_duration_curves() or load_all() first."
-            )
+            msg = "No results to export. Run calculate_exceedances() or load_all() first."
+            raise ValueError(msg)
 
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -249,7 +208,7 @@ class Reporter:
         if report_format == "html":
             return self._export_html_report(
                 output_dir=output_dir,
-                filename=filename or "duration_curve_report.html",
+                filename=filename or "exceedance_report.html",
                 image_format=image_format,
                 dpi=dpi,
                 close_figures=close_figures,
@@ -258,7 +217,7 @@ class Reporter:
         if report_format == "pdf":
             return self._export_pdf_report(
                 output_dir=output_dir,
-                filename=filename or "duration_curve_report.pdf",
+                filename=filename or "exceedance_report.pdf",
                 close_figures=close_figures,
             )
 
@@ -271,28 +230,53 @@ class Reporter:
             )
             return output_dir
 
-        raise ValueError(
-            f'Unsupported format: {report_format}. Expected "html", "pdf", or "images".'
-        )
+        msg = f'Unsupported format: {report_format}. Expected "html", "pdf", or "images".'
+        raise ValueError(msg)
 
     # ─── Private Export Helpers ────────────────────────────────────
     def create_dataframe(self, station_codes: list[int]) -> pd.DataFrame:
-        """Export duration-curve data to a CSV file."""
+        """
+        Combine selected stations' daily climatology with station identity.
+
+        Args:
+            station_codes: Stations to include.
+
+        Returns:
+            Rounded statistics indexed by station, month, and day.
+
+        """
         df = pd.concat(
-            [result.df for code, result in self.results.items() if code in station_codes]
+            {
+                code: result.daily_curve
+                for code, result in self.results.items()
+                if code in station_codes
+            },
+            names=["station_code"],
         )
         return df.round()
-
 
     def _export_pdf_report(
         self,
         output_dir: Path,
         filename: str,
+        *,
         close_figures: bool,
     ) -> Path:
+        """
+        Export saved reference charts as a multipage PDF.
+
+        Args:
+            output_dir: Destination directory.
+            filename: PDF filename.
+            close_figures: Release figures after writing.
+
+        Returns:
+            Written PDF path.
+
+        """
         pdf_path = output_dir / filename
 
-        with PdfPages(pdf_path) as pdf:
+        with PdfPages(str(pdf_path)) as pdf:
             for station in tqdm(self.results, desc="Exporting PDF"):
                 fig = self.plot_station_chart(station)
                 pdf.savefig(fig, bbox_inches="tight")
@@ -307,8 +291,23 @@ class Reporter:
         filename: str,
         image_format: str,
         dpi: int,
+        *,
         close_figures: bool,
     ) -> Path:
+        """
+        Export saved reference charts in a standalone HTML report.
+
+        Args:
+            output_dir: Destination directory.
+            filename: HTML filename.
+            image_format: Chart image format.
+            dpi: Raster resolution.
+            close_figures: Release figures after writing.
+
+        Returns:
+            Written HTML path.
+
+        """
         image_dir = output_dir / "images"
         image_paths = self._export_chart_images(
             output_dir=image_dir,
@@ -327,15 +326,29 @@ class Reporter:
         output_dir: Path,
         image_format: str,
         dpi: int,
+        *,
         close_figures: bool,
     ) -> list[Path]:
+        """
+        Render each station to an image file.
+
+        Args:
+            output_dir: Image destination directory.
+            image_format: Image format extension.
+            dpi: Raster resolution.
+            close_figures: Release figures after writing.
+
+        Returns:
+            Paths of exported images.
+
+        """
         output_dir.mkdir(parents=True, exist_ok=True)
         image_paths: list[Path] = []
 
         for station in tqdm(self.results, desc="Exporting charts"):
             fig = self.plot_station_chart(station)
             image_path = output_dir / f"{station}.{image_format}"
-            fig.savefig(image_path, dpi=dpi, bbox_inches="tight")
+            fig.savefig(str(image_path), dpi=dpi, bbox_inches="tight")
             if close_figures:
                 plt.close(fig)
             image_paths.append(image_path)
@@ -343,6 +356,16 @@ class Reporter:
         return image_paths
 
     def _build_html_content(self, image_paths: list[Path]) -> str:
+        """
+        Embed chart images in a portable HTML document.
+
+        Args:
+            image_paths: Previously rendered chart files.
+
+        Returns:
+            HTML containing base64-encoded chart images.
+
+        """
         html_parts = [
             "<html>",
             "<head>",
@@ -384,7 +407,5 @@ class Reporter:
         return list(self.results.keys())
 
     def __repr__(self) -> str:
-        return (
-            f"Reporter({len(self.results)} stations loaded, "
-            f"{len(self.errors)} errors)"
-        )
+        """Return the number of loaded stations and recorded failures."""
+        return f"Reporter({len(self.results)} stations loaded, {len(self.errors)} errors)"

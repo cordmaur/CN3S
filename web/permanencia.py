@@ -34,7 +34,14 @@ from flask import (
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
 
-from hydro.duration_curve import LEAP_DAY, DurationCurveReporter
+from hydro.exceedance import (
+    LEAP_DAY,
+    RESULT_FILES,
+    SCHEMA_VERSION,
+    ExceedanceAnalysis,
+    default_thresholds,
+    statistic_column,
+)
 from hydro.station import Station
 from utils.user_sql_connector import UserSqlConnector
 
@@ -72,14 +79,14 @@ def metadata(code: int) -> tuple[dict[str, Any], str]:
         Metadata and SHA-256 revision of its original bytes.
 
     """
-    raw = (results_root() / str(code) / "meta.json").read_bytes()
+    raw = (results_root() / str(code) / "metadata.json").read_bytes()
     data = json.loads(raw)
     if int(data["station_code"]) != code:
         msg = "O código salvo não corresponde ao diretório da estação."
         raise ValueError(msg)
     # Include scientific files: a recalculation may leave scalar metadata unchanged.
     digest = hashlib.sha256(raw)
-    for name in ("curve.parquet", "stats.parquet"):
+    for name in RESULT_FILES[:-1]:
         status = (results_root() / str(code) / name).stat()
         digest.update(str((status.st_mtime_ns, status.st_size)).encode())
     return data, digest.hexdigest()
@@ -106,10 +113,10 @@ def station_catalog() -> list[dict[str, Any]]:
         try:
             # Catalog identities require only the JSON sidecar. Parquets are checked
             # when opening the station, avoiding repeated filesystem metadata calls.
-            meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+            meta = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
             saved_code = int(meta["station_code"])
             item["name"] = meta["station_name"]
-            series_type = meta["series_type"]
+            schema_version = meta["schema_version"]
         except (OSError, KeyError, json.JSONDecodeError):
             item["error"] = (
                 "Os arquivos da estação estão incompletos ou os metadados são inválidos."
@@ -119,8 +126,8 @@ def station_catalog() -> list[dict[str, Any]]:
         else:
             if saved_code != code:
                 item["error"] = "O código salvo não corresponde ao diretório da estação."
-            elif series_type != "cota":
-                item["error"] = "O resultado salvo não é uma curva de cotas."
+            elif schema_version != SCHEMA_VERSION:
+                item["error"] = "O formato salvo requer recálculo das permanências."
             else:
                 item["available"] = True
         rows.append(item)
@@ -147,11 +154,13 @@ def numeric_rows(rows: list[dict[str, Any]], *, corrections: bool = False) -> di
     result: dict[str, Any] = {}
     for row in rows:
         try:
-            value = float(row["value"])
+            value = (
+                None if not corrections and row.get("value") in (None, "") else float(row["value"])
+            )
         except (KeyError, TypeError, ValueError):
             msg = "Informe valores numéricos finitos."
             raise ValueError(msg) from None
-        if not math.isfinite(value):
+        if value is not None and not math.isfinite(value):
             msg = "Informe valores numéricos finitos."
             raise ValueError(msg) from None
         if corrections:
@@ -176,6 +185,24 @@ def numeric_rows(rows: list[dict[str, Any]], *, corrections: bool = False) -> di
                 raise ValueError(msg)
             result[name] = value
     return result
+
+
+def reference_selection(payload: dict[str, Any]) -> list[int]:
+    """
+    Read the plot-only choice of whole-record horizontal stage references.
+
+    Args:
+        payload: Chart settings submitted by the browser.
+
+    Returns:
+        Selected 5 and/or 95 percent levels, without affecting calculations.
+
+    """
+    values = payload.get("reference_exceedances", [])
+    if not isinstance(values, list) or any(value not in (5, 95) for value in values):
+        msg = "Selecione apenas as permanências 5% e 95%."
+        raise ValueError(msg)
+    return list(dict.fromkeys(values))
 
 
 def stats_rows(station: Station) -> list[dict[str, Any]]:
@@ -221,7 +248,7 @@ def progress(job_id: str, phase: str) -> None:
         cache.set("operation:" + job_id, job, timeout=TTL)
 
 
-def station_image(station: Station, reporter: DurationCurveReporter) -> tuple[bytes, str | None]:
+def station_image(station: Station, reporter: ExceedanceAnalysis) -> tuple[bytes, str | None]:
     """
     Draw the notebook's annual chart with local, headless Matplotlib objects.
 
@@ -266,7 +293,7 @@ def station_image(station: Station, reporter: DurationCurveReporter) -> tuple[by
     )
 
 
-def station_plotly(station: Station, reporter: DurationCurveReporter) -> dict[str, Any]:
+def station_plotly(station: Station, reporter: ExceedanceAnalysis) -> dict[str, Any]:
     """
     Build interactive traces from the same references as the annual notebook chart.
 
@@ -280,9 +307,10 @@ def station_plotly(station: Station, reporter: DurationCurveReporter) -> dict[st
     """
     year = datetime.now(ZoneInfo("America/Sao_Paulo")).year
     result = reporter.results
-    stats = result.df.copy()
-    months = stats.index.get_level_values("mes")
-    days = stats.index.get_level_values("dia")
+    variable = result.stage_variable()
+    stats = result.daily_curve.copy()
+    months = stats.index.get_level_values("month")
+    days = stats.index.get_level_values("day")
     # Align by calendar day, excluding leap day exactly as in Matplotlib.
     keep = ~((months == LEAP_DAY[0]) & (days == LEAP_DAY[1]))
     stats = stats.loc[keep]
@@ -317,13 +345,19 @@ def station_plotly(station: Station, reporter: DurationCurveReporter) -> dict[st
             }
         )
 
-    trace("Mínima histórica", dates, stats["min"], "darkgray")
-    trace("Máxima histórica", dates, stats["max"], "gray")
-    trace("Permanência 90%", dates, stats["q10"], "lightblue", showlegend=False)
+    trace("Mínima histórica", dates, stats[statistic_column(variable, "min")], "darkgray")
+    trace("Máxima histórica", dates, stats[statistic_column(variable, "max")], "gray")
+    trace(
+        "Permanência 90%",
+        dates,
+        stats[statistic_column(variable, 90)],
+        "lightblue",
+        showlegend=False,
+    )
     trace(
         "Permanência 90-10%",
         dates,
-        stats["q90"],
+        stats[statistic_column(variable, 10)],
         "lightblue",
         fill="tonexty",
         fillcolor="rgba(173,216,230,0.2)",
@@ -331,7 +365,7 @@ def station_plotly(station: Station, reporter: DurationCurveReporter) -> dict[st
     trace(
         "MLT",
         dates,
-        stats["MLT"],
+        stats[statistic_column(variable, "mean")],
         "lightblue",
         line={"color": "lightblue", "dash": "dash", "width": 1.5},
     )
@@ -355,7 +389,7 @@ def station_plotly(station: Station, reporter: DurationCurveReporter) -> dict[st
             customdata=annual.index.strftime("%d/%m/%Y").tolist(),
             hovertemplate="%{customdata}: %{y:.2f} cm<extra>%{fullData.name}</extra>",
         )
-    for index, (name, value) in enumerate(result.thresholds.items()):
+    for index, (name, value) in enumerate(result.stage_references().items()):
         color = ("darkgoldenrod", "darkred", "red")[index % 3]
         trace(
             name,
@@ -408,7 +442,7 @@ def load_chart(
         with lock:
             data, revision = metadata(code)
             station = Station(code, sanitization=data.get("sanitization") or None, connector=conn)
-            reporter = DurationCurveReporter.from_saved(results_root() / str(code), station)
+            reporter = ExceedanceAnalysis.from_saved(results_root() / str(code), station)
         today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
         station.load_series(
             source="telemetria",
@@ -433,10 +467,10 @@ def load_chart(
         "code": code,
         "name": data["station_name"],
         "thresholds": data.get("thresholds", {}),
-        "description": data["description"],
+        "description": data["descriptions"][reporter.results.stage_variable()],
         "source": data["source"],
-        "method": data["method"],
-        "requested_method": data.get("requested_method"),
+        "method": data["plot_method"],
+        "reference_exceedances": data.get("reference_exceedances", []),
         "revision": revision,
         "latest": latest,
         "chart_id": job_id,
@@ -501,7 +535,7 @@ def analyze(
 
 
 def publish_results(
-    code: int, reporter: DurationCurveReporter, *, editing: bool, revision: str | None
+    code: int, reporter: ExceedanceAnalysis, *, editing: bool, revision: str | None
 ) -> None:
     """
     Publish complete scientific files while protecting concurrent edits.
@@ -525,7 +559,7 @@ def publish_results(
                 reporter.save_results(staging)
                 prepared = Path(staging) / str(code)
                 if editing:
-                    names = ("curve.parquet", "stats.parquet", "meta.json")
+                    names = RESULT_FILES
                     backup = Path(staging) / "previous"
                     backup.mkdir()
                     for name in names:
@@ -586,9 +620,9 @@ def insert(
         station.series = analysis["series"]
         station.stats = analysis["stats"]
         station.telemetric_info = analysis["telemetric_info"]
-        reporter = DurationCurveReporter(station, thresholds=thresholds)
+        reporter = ExceedanceAnalysis(station, thresholds=thresholds)
         # Use the same source as the reporter when checking the correction dates.
-        source = reporter._select_best_source("cota")  # noqa: SLF001
+        source = "hidro/telemetria"
         for kind, replacements in corrections.items():
             series = station.get_series(source, kind)
             for day in replacements:
@@ -599,7 +633,10 @@ def insert(
                     )
                     raise ValueError(msg)
         progress(job_id, "Calculando curva histórica…")
-        reporter.create_duration_curve(series_type="cota", source=source, method=method)
+        result = reporter.calculate(source=source)
+        result.plot_method = method
+        result.reference_exceedances = reference_selection(payload)
+        result.stage_variable()
         progress(job_id, "Salvando resultados…")
         publish_results(code, reporter, editing=editing, revision=analysis["revision"])
     finally:
@@ -644,7 +681,8 @@ def save_limits(
         if payload.get("revision") != revision:
             msg = "Os limites foram alterados por outra pessoa. Atualize a estação antes de salvar."
             raise ValueError(msg)
-        data["thresholds"] = thresholds
+        data["thresholds"] = default_thresholds() | thresholds
+        data["reference_exceedances"] = reference_selection(payload)
         folder = results_root() / str(code)
         temporary = None
         try:
@@ -654,8 +692,8 @@ def save_limits(
                 temporary = Path(stream.name)
                 json.dump(data, stream, ensure_ascii=False, indent=2)
             # Preserve shared-data permissions when replacing a restrictive temp file.
-            temporary.chmod((folder / "meta.json").stat().st_mode & 0o777)
-            temporary.replace(folder / "meta.json")
+            temporary.chmod((folder / "metadata.json").stat().st_mode & 0o777)
+            temporary.replace(folder / "metadata.json")
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)

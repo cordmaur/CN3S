@@ -54,7 +54,7 @@
     busy = value;
     $('#operation-progress').hidden = !value;
     document.querySelectorAll('#limit-rows input, #limit-rows button').forEach(control => { control.disabled = value; });
-    for (const id of ['new-station', 'edit-station', 'refresh', 'save-limits', 'add-limit', 'calculate-insert']) {
+    for (const id of ['edit-station', 'refresh', 'save-limits', 'add-limit', 'calculate-insert']) {
       $('#' + id).disabled = value;
     }
   }
@@ -128,7 +128,7 @@
     const name = document.createElement('input'); name.value = label; name.required = true; name.placeholder = 'Nome do limite'; name.setAttribute('aria-label', 'Nome do limite');
     nameCell.append(name);
     const valueCell = document.createElement('td'); valueCell.className = 'value';
-    const input = document.createElement('input'); input.type = 'number'; input.step = 'any'; input.required = true; input.value = value; input.setAttribute('aria-label', 'Cota em centímetros'); valueCell.append(input);
+    const input = document.createElement('input'); input.type = 'number'; input.step = 'any'; input.required = false; input.value = value ?? ''; input.setAttribute('aria-label', 'Cota em centímetros'); valueCell.append(input);
     const removeCell = document.createElement('td'); removeCell.className = 'remove';
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'danger'; remove.textContent = '×'; remove.setAttribute('aria-label', 'Remover limite');
     remove.onclick = () => { row.remove(); changed(); }; removeCell.append(remove);
@@ -140,14 +140,17 @@
     for (const row of container.rows) {
       const inputs = row.querySelectorAll('input');
       if (![...inputs].every(input => input.reportValidity())) return null;
-      const name = inputs[0].value.trim(), value = Number(inputs[1].value);
-      if (!name || !Number.isFinite(value) || values.some(item => item.name === name)) {
+      const name = inputs[0].value.trim(), value = inputs[1].value === '' ? null : Number(inputs[1].value);
+      if (!name || (value !== null && !Number.isFinite(value)) || values.some(item => item.name === name)) {
         notify('Informe nomes distintos e valores numéricos válidos para os limites.'); return null;
       }
       values.push({ name, value });
     }
     return values;
   }
+  function readReferences(prefix) { return [95, 5].filter(p => $(`#${prefix}-${p}`).checked); }
+  function setReferences(prefix, values) { [95, 5].forEach(p => { $(`#${prefix}-${p}`).checked = values.includes(p); }); }
+  [95, 5].forEach(p => { $(`#reference-${p}`).onchange = markDirty; });
   function markDirty() { dirty = true; $('#save-note').textContent = 'Alterações não salvas. O salvamento será compartilhado com toda a equipe.'; }
   // Load the graph library only when needed; catalog rendering never waits for it.
   let plotlyReady = null;
@@ -222,7 +225,7 @@
     $('#initial-panel').hidden = true; $('#station-details').hidden = false;
     $('#station-title').textContent = title(data.name); $('#station-code').textContent = 'Estação ' + data.code;
     $('#source-label').textContent = 'Fonte: ' + data.source.toLocaleUpperCase('pt-BR');
-    $('#method-label').textContent = data.method === 'cota/vazao' ? 'Cota a partir da vazão' : 'Cota observada';
+    $('#method-label').textContent = data.method === 'from_discharge' ? 'Cota a partir da vazão' : 'Cota observada';
     $('#period-label').textContent = data.description;
     const image = `${root}/graficos/${data.chart_id}.png`;
     $('#chart').src = image; $('#chart').alt = 'Gráfico anual de cotas da estação ' + data.name;
@@ -230,13 +233,13 @@
     $('.image-note').textContent = data.latest ? 'Última observação telemétrica: ' + data.latest : 'Sem observações telemétricas recentes. O gráfico apresenta as referências históricas.';
     $('#limit-rows').replaceChildren();
     Object.entries(data.thresholds).forEach(([name, value]) => addLimit($('#limit-rows'), name, value, markDirty));
+    setReferences('reference', data.reference_exceedances || []);
     $('#save-note').textContent = 'As alterações salvas serão compartilhadas com toda a equipe.';
     if (!catalog.some(item => item.code === data.code)) {
       catalog.push({ code: data.code, name: data.name, available: true, error: '' });
       catalog.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
     }
     showError(data.warning || '');
-    if (data.requested_method === 'from_discharge' && data.method !== 'cota/vazao') notify('A curva foi calculada diretamente das cotas: houve troca automática do método solicitado.');
     renderList(); showChartMode();
   }
   function openStation(code, refresh = false) {
@@ -250,7 +253,7 @@
   $('#save-limits').onclick = () => {
     if (!activeStation) return;
     const thresholds = readLimits($('#limit-rows')); if (thresholds === null) return;
-    operate(`${root}/estacoes/${activeStation.code}/limites`, { thresholds, revision: activeStation.revision }, data => {
+    operate(`${root}/estacoes/${activeStation.code}/limites`, { thresholds, reference_exceedances: readReferences('reference'), revision: activeStation.revision }, data => {
       displayChart(data); if (!data.saved_only) notify('Limites salvos para toda a equipe.');
     });
   };
@@ -307,7 +310,8 @@
     if (data.editing) {
       $('#review-form').reset();
       const settings = data.settings;
-      const method = settings.requested_method || (settings.method === 'cota/vazao' ? 'from_discharge' : 'direct');
+      setReferences('new-reference', settings.reference_exceedances || []);
+      const method = settings.plot_method || 'from_discharge';
       $(`input[name=calculation-method][value=${method}]`).checked = true;
       $('#new-limits').replaceChildren();
       Object.entries(settings.thresholds || {}).forEach(([name, value]) => addLimit($('#new-limits'), name, value));
@@ -373,7 +377,7 @@
     const method = $('input[name=calculation-method]:checked').value;
     $('#calculation-summary').textContent = `Estação ${analysis.code} · ${rows.length} correção(ões) pontual(is) · ${thresholds.length} limite(s).`;
     insertionStep('progress');
-    operate(`${root}/estacoes`, { code: analysis.code, analysis_id: analysis.analysis_id, editing: Boolean(analysis.editing), method, corrections: rows, thresholds }, displayChart);
+    operate(`${root}/estacoes`, { code: analysis.code, analysis_id: analysis.analysis_id, editing: Boolean(analysis.editing), method, corrections: rows, thresholds, reference_exceedances: readReferences('new-reference') }, displayChart);
   };
   window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
   renderList();

@@ -59,11 +59,7 @@ class Station:
         self.telemetria = Telemetria(self.hidro.connector)
         self.stats: pd.DataFrame | None = None
 
-        try:
-            self.info = self.hidro.get_station_info(self.code)
-        except Exception:
-            self.close()
-            raise
+        self.info = self.hidro.get_station_info(self.code)
 
     @classmethod
     def from_folder(

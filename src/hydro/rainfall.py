@@ -17,6 +17,7 @@ from mergedownloader.file_downloader import DownloadMode, FileDownloader
 from mergedownloader.inpeparser import InpeParsers, InpeTypes
 from mergedownloader.utils import GISUtil
 from rasterio.enums import Resampling
+from rioxarray.exceptions import NoDataInBounds
 from shapely.geometry import box
 
 from hydro.forecast import load_forecast_grids, plot_rainfall_comparison
@@ -116,6 +117,9 @@ class RainfallForecast:
             anomalies for visualization. Forecast
             metadata records initialization, as_of, forecast_start, and models.
             Current-month observed rainfall may be partial or cached.
+            Coarse grids select cell centres inside the basin, falling back to
+            intersecting cells when no centres are inside. The selection rule is
+            recorded in basin_cell_selection; intersecting cells have equal weight.
 
         Raises:
             FileNotFoundError: If CDS files are missing; download with notebook 03.
@@ -228,7 +232,7 @@ class RainfallForecast:
             .rio.reproject_match(template, resampling=Resampling.average)
             .rename(x="longitude", y="latitude")
         )
-        # Retain real surrounding cells; basin products below keep the original mask.
+        # Retain real surrounding cells independently of the basin selection below.
         regional_ratio = forecast["prec"] / forecast["hindcast"]
         map_data = xr.Dataset(
             {
@@ -242,19 +246,23 @@ class RainfallForecast:
                 ),
             },
         )
-        forecast = xr.Dataset(
-            {
-                variable: GISUtil.cut_cube_by_geoms(forecast[variable], self.basin.geometry)
-                for variable in ("prec", "hindcast")
-            },
-        )
-        forecast["climatology"] = GISUtil.cut_cube_by_geoms(mapped_climatology, self.basin.geometry)
+        forecast["climatology"] = mapped_climatology
+        geometries = self.basin.to_crs(forecast.rio.crs).geometry
+        # Clip all coarse variables together so their basin masks remain identical.
+        # A small basin may intersect a cell without containing its centre.
+        try:
+            forecast = forecast.rio.clip(geometries)
+            basin_cell_selection = "cell_center"
+        except NoDataInBounds:
+            forecast = forecast.rio.clip(geometries, all_touched=True)
+            basin_cell_selection = "all_touched"
         forecast.attrs.update(
             initialization=initialization.isoformat(),
             as_of=reference.isoformat(),
             forecast_start=forecast_start.isoformat(),
             models=list(models),
             basin_name=self.name,
+            basin_cell_selection=basin_cell_selection,
         )
         map_data.attrs = forecast.attrs.copy()
         forecast = self._correct_forecast(forecast, climatology_data["basin_mean"])
@@ -483,7 +491,7 @@ class RainfallForecast:
             y=label,
             color="Modelo",
             barmode="group",
-            title="Anomalia mensal de precipitação por modelo",
+            title=f"<b>{self.name}</b><br>Anomalia mensal de precipitação por modelo",
         )
         fig.update_traces(
             hovertemplate=(

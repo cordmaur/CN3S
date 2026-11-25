@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block content %}
+{% if step != 'estacao' %}
+<script defer src="{{ url_for('static', filename='vendor/plotly-4.1.1.min.js') }}"></script>
+<script defer src="{{ url_for('static', filename='vendor/plotly-locale-pt-br-3.1.0.js') }}"></script>
+{% endif %}
+<script defer src="{{ url_for('static', filename='cn3s.js') }}"></script>
+<main class="page cn3s-page" id="cn3s-workspace" data-operation="{{ operation }}" data-step="{{ step }}">
+<div class="cn3s-heading"><div><p class="muted">MODELAGEM MENSAL · PROVA DE CONCEITO</p>
+<h1>Da chuva à vazão</h1><p>Estação, calibração e previsão em três etapas.</p></div>
+</div>
+<p id="cn-error" class="cn-notice" role="alert" hidden></p>
+<p id="cn-progress" class="cn-notice" role="status" aria-live="polite" hidden></p>
+<nav class="cn-section-nav" aria-label="Etapas CN3S">{% for key, label in [('estacao', 'Estação'), ('calibrar', 'Calibrar Estação'), ('previsao', 'Previsão')] %}<a href="{{ url_for('cn3s.index', step=key) }}" {% if step == key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav>
+<div id="cn-controls">
+<section class="card"><h2>{{ title }}</h2>
+<label for="cn-station">Visualizar estação</label>
+<select id="cn-station"><option value="">Selecione uma estação</option>{% for station in stations %}<option value="{{ station.code }}">{{ station.name }} · {{ station.code }}</option>{% endfor %}</select>
+<div id="cn-station-info" class="cn-summary">Selecione uma estação para visualizar os dados.</div>
+</section>
+{% include 'cn3s_' ~ step ~ '.html' %}
+</div>
+<section class="card" id="cn-results" hidden>
+<h2>Resultados</h2><p id="cn-result-label"></p><p id="cn-warnings" class="cn-notice" hidden></p>
+{% if step == 'previsao' %}<p>As faixas P10–P90 mostram variabilidade histórica, não incerteza da previsão. O ACT já está aplicado às datas numéricas. Não foi aplicado ajuste à vazão observada.</p>{% endif %}
+<div id="cn-downloads" class="cn-actions"></div>
+<div id="cn-charts"></div>
+<div id="cn-result-tables"></div>
+<details><summary>Configuração e procedência</summary><pre id="cn-record"></pre></details>
+<p class="muted">Resultados disponíveis por até uma hora após a conclusão. Baixe os arquivos para manter um registro. Reiniciar o servidor interrompe trabalhos em andamento.</p>
+</section>
+</main>
+{% endblock %}

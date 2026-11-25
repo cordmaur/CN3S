@@ -21,6 +21,10 @@ COPY web/templates/ ./web/templates/
 COPY web/static/ ./web/static/
 COPY src/hydro/ ./src/hydro/
 COPY src/utils/ ./src/utils/
+COPY src/hydrography/ ./src/hydrography/
+
+ARG SHC_CODE_REVISION=unknown
+ENV SHC_CODE_REVISION=$SHC_CODE_REVISION
 
 ENV PYTHONPATH=/app/src
 ENV MPLBACKEND=Agg

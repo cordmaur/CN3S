@@ -8,13 +8,15 @@ services:
     build:
       context: ..
       dockerfile: web/Dockerfile
+      args:
+        SHC_CODE_REVISION: ${SHC_CODE_REVISION:-unknown}
     ports:
-      # Test independently of the devcontainer's forwarded port 8000.
-      - "127.0.0.1:18000:8000"
+      # IIS proxies to 127.0.0.1:8000, so this uses 8000 and conflicts with the dev server.
+      - "127.0.0.1:${SHC_HOST_PORT:-8000}:8000"
     volumes:
       - type: bind
         source: ${SHC_DURATION_CURVES_HOST_DIR:?Defina SHC_DURATION_CURVES_HOST_DIR com a pasta de curvas no host}
-        target: /data/CN3S/duration_curves
+        target: /data/CN3S/Exceedance
         bind:
           create_host_path: false
     restart: unless-stopped

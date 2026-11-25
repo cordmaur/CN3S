@@ -12,6 +12,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+reports = ["python-docx>=1.2,<2"]
 web = [
     "flask",
     "gunicorn",
@@ -25,6 +26,13 @@ web = [
     "pyodbc",
     "azure-identity",
     "pyarrow",
+    "scipy",
+    "scikit-learn",
+    "plotly>=6,<8",
+    "xarray",
+    "rioxarray",
+    "netCDF4",
+    "merge-downloader @ https://codeload.github.com/cordmaur/merge-downloader/tar.gz/5660c84f76da244fb057d0f188a76158ecc14013#sha256=19acd5f6a37e516c7ed6f3dce92508a4bc1a659ea8417aa6e1c38273580cf5ae",
 ]
 dev = [
     "mypy",
@@ -32,6 +40,9 @@ dev = [
     "pytest",
     "numpy-stubs",
 ]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cn3s"]
@@ -42,7 +53,7 @@ line-length = 100
 [tool.ruff.lint]
 select = ["ALL"]
 # TRY003 permits clear built-in exceptions without custom classes; COM812 conflicts with ruff format.
-ignore = ["C901", "ANN401", "RET504", "EXE002", "T201", "D203", "D212", "TRY300", "BLE001", "S608", "S101", "PLR0913", "S301", "TRY003", "COM812"]
+ignore = ["C901", "ANN401", "RET504", "EXE002", "T201", "D203", "D212", "TRY300", "BLE001", "S608", "S101", "PLR0913", "S301", "TRY003", "COM812", "B019"]
 
 [tool.mypy]
 files = [
@@ -54,3 +65,8 @@ strict_equality_for_none = true
 warn_unreachable = true
 follow_imports = "skip"
 ignore_missing_imports = true
+
+# Preserve framework types when checking the Flask entry points explicitly.
+[[tool.mypy.overrides]]
+module = ["flask.*", "werkzeug.*"]
+follow_imports = "normal"

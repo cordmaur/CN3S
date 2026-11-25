@@ -111,8 +111,7 @@ class Hidro(SqlProvider):
         """Fetch only this station's rating curves when requested."""
         table = self.resolve_table("hidro", "curvadescarga", self.curves_table)
         frame = self.read(
-            "SELECT EstacaoCodigo, NumeroCurva, TipoEquacao, CoefA, CoefH0, CoefN, "
-            f"CotaMinima, CotaMaxima FROM {table} WHERE EstacaoCodigo = :code",
+            f"SELECT *  FROM {table} WHERE EstacaoCodigo = :code",
             {"code": int(station)},
         )
         require_columns(
@@ -120,7 +119,9 @@ class Hidro(SqlProvider):
             ["NumeroCurva", "TipoEquacao", "CoefA", "CoefH0", "CoefN", "CotaMinima", "CotaMaxima"],
             "Rating curves",
         )
-        return frame
+
+        last_validity = frame["PeriodoValidadeInicio"].max()
+        return frame[frame["PeriodoValidadeInicio"] == last_validity]
 
     @staticmethod
     def flow_from_stage(

@@ -34,7 +34,8 @@ class Inference:
             station: Prepared station with basin geometry and station_dir.
             data_dir: CN3S root containing forecasts/ and downloads/.
             freq: Monthly frequency, "M". Daily inference is not implemented.
-            optimization: Calibration JSON filename inside the station's optim/ folder.
+            optimization: Legacy filename inside optim/, or an explicit station-relative
+                path such as Monthly/optim/run.json. Explicit paths avoid ambiguity.
 
         """
         if freq != "M":
@@ -48,7 +49,10 @@ class Inference:
             self.data_dir,
             name=f"{station.name} ({station.code})",
         )
-        self.params = CN3SParams.from_file(station.station_dir / "optim" / optimization)
+        calibration = Path(optimization)
+        if calibration.name == optimization:
+            calibration = Path("optim") / calibration
+        self.params = CN3SParams.from_file(station.station_dir / calibration)
         self.model = CN3S(self.params, freq="M")
 
     def prepare_data(

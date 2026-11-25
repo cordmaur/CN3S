@@ -1,0 +1,28 @@
+<section class="card"><h2>Dados mensais para calibração</h2><div id="cn-inputs"></div><a id="cn-input-download" hidden>Baixar dados mensais (CSV)</a><details><summary>Preparar dados mensais</summary>
+<p>Essas ações gravam arquivos compartilhados. A chuva e a vazão são obtidas separadamente. Calibrações existentes devem ser revistas se a bacia ou o início da série mudar.</p>
+<div class="cn-fields">
+<label>Primeiro mês<input id="cn-start" type="month" value="2000-01"></label><label>Último mês<input id="cn-end" type="month" value="2026-09"></label></div>
+<label class="cn-check"><input type="checkbox" id="cn-replace"> Substituir os arquivos indicados abaixo pelos dados calculados.</label>
+<div class="cn-actions"><button id="cn-save-rain" type="button">Salvar chuva mensal</button><button id="cn-save-discharge" type="button">Salvar vazão mensal</button></div>
+<p class="muted">Chuva/vazão: Monthly/rain.parquet ou Monthly/discharge.parquet. A vazão usa todos os dias disponíveis até o fim do último mês; o mês atual pode estar parcial.</p>
+</details>
+</section>
+<section class="card" id="cn-calibration">
+<h2>Calibrar Estação</h2>
+<label for="cn-calibration-select">Parâmetros salvos · somente frequência mensal</label><select id="cn-calibration-select"><option value="">Selecione uma estação primeiro</option></select>
+<div id="cn-calibration-info" class="cn-summary"></div>
+<details><summary>Parâmetros selecionados</summary><dl id="cn-parameter-values" class="cn-fields"></dl></details>
+<details><summary>Executar uma nova calibração</summary>
+<p>Usa os arquivos salvos e os parâmetros iniciais padrão do CN3S. A origem da chuva é preservada porque o armazenamento inicial depende desse histórico. O corte final define o período; a divisão treino/validação é cronológica.</p>
+<div class="cn-fields"><label>Nome novo<input id="cn-name" value="poc_monthly" pattern="[A-Za-z0-9_-]{1,64}"></label>
+<label>Último mês<input id="cn-cal-end" type="month" value="2026-09"></label>
+<label>Fração de treino<input id="cn-ratio" type="number" min="0.1" max="0.99" step="0.01" value="0.9"></label>
+<label>Objetivo<select id="cn-objective"><option>PlainNSE</option><option>ExtremeFlowBlend</option></select></label>
+<label>Máximo de iterações<input id="cn-maxiter" type="number" min="1" max="20" value="5"></label>
+<label>Semente<input id="cn-seed" type="number" min="0" value="42"></label>
+<label>Aquecimento (meses)<input id="cn-warmup" type="number" min="1" max="24" value="3"></label></div>
+<details><summary>Limites dos parâmetros</summary><div class="cn-table-wrap"><table><thead><tr><th>Parâmetro</th><th>Mínimo</th><th>Máximo</th></tr></thead><tbody id="cn-bounds">{% for name, limits in bounds.items() %}<tr data-param="{{ name }}"><th>{{ name }}{% if name == 'act' %} (meses inteiros){% elif name == 'r0' %} (mm){% endif %}</th><td><input aria-label="Mínimo {{ name }}" type="number" step="any" value="{{ limits[0] }}"></td><td><input aria-label="Máximo {{ name }}" type="number" step="any" value="{{ limits[1] }}"></td></tr>{% endfor %}</tbody></table></div></details>
+<button id="cn-calibrate" type="button" disabled>Calibrar e salvar novo arquivo</button>
+<p class="muted">Um trabalhador, população de 5 por parâmetro, sem polimento final. Uma execução que atinge o limite de iterações não comprova convergência nem habilidade preditiva.</p>
+</details>
+</section>

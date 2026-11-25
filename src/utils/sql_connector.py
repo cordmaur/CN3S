@@ -97,6 +97,8 @@ class SqlConnector:
 
         """
         self.odbc_connection_string = SqlConnector.CONNECTION_STRING
+        # Keep query snapshots across stations and engine reconnects, without expiration.
+        self._query_cache: dict[tuple[Any, ...], pd.DataFrame] | None = {}
         self.credential = self._create_credential()
         self.pool_recycle = pool_recycle
         self.pool_size = pool_size
@@ -345,6 +347,10 @@ class SqlConnector:
         """
         Read a SQL query into a pandas dataframe, retrying failed attempts.
 
+        Successful reads are cached for this connector without TTL or size eviction.
+        Call clear_query_cache() to fetch updated observations on subsequent reads.
+        Query parameters must be hashable scalar values (including datetimes).
+
         Args:
             query (str): SQL query to execute.
             params: Bound SQL query parameters.
@@ -356,9 +362,23 @@ class SqlConnector:
             failure_message (str | None): Message used if all attempts fail.
 
         Returns:
-            pd.DataFrame: Dataframe returned by pandas.read_sql.
+            pd.DataFrame: Independent dataframe; edits do not alter cached SQL results.
 
         """
+        key: tuple[Any, ...] = ()
+        if self._query_cache is not None:
+            # Normalize mappings while retaining scalar types and date-parsing order.
+            # Retry/streaming options do not change the resulting observations.
+            key = (
+                query,
+                tuple((name, type(value), value) for name, value in sorted((params or {}).items())),
+                tuple(parse_dates or ()),
+                tuple(sorted((dtype or {}).items())),
+            )
+            cached = self._query_cache.get(key)
+            if cached is not None:
+                return cached.copy(deep=True)
+
         data = None
         last_exception = None
 
@@ -398,7 +418,19 @@ class SqlConnector:
             msg = failure_message or f"Failed to retrieve data after {max_attempts} attempts"
             raise ConnectionError(msg) from last_exception
 
+        if self._query_cache is not None:
+            # Store only successful reads, including empty results, before caller edits.
+            self._query_cache[key] = data.copy(deep=True)
         return data
+
+    def clear_query_cache(self) -> None:
+        """
+        Release this connector's cached SQL snapshots so subsequent reads query SQL.
+
+        Does not clear the separate application cache used by UserSqlConnector.
+        """
+        if self._query_cache is not None:
+            self._query_cache.clear()
 
     def list_tables(self, schema: str | None = None) -> list[str]:
         """
@@ -445,6 +477,7 @@ class SqlConnector:
         Use this when you're completely done with the connector.
         Use dispose_engine() for temporary engine recreation.
         """
+        self.clear_query_cache()
         self.dispose_engine()
 
         if hasattr(self.credential, "close") and callable(self.credential.close):

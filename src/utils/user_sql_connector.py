@@ -36,6 +36,8 @@ class UserSqlConnector(SqlConnector):
 
         """
         # Do not call the notebook initializer: it creates a shared device-login cache.
+        # Use only the application cache so explicit refresh always reaches SQL.
+        self._query_cache = None
         self._access_token = access_token
         self.cache = cache
         self.use_cache = use_cache

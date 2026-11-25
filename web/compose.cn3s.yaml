@@ -1,0 +1,36 @@
+# Optional data mounts for the CN3S PoC; keep the base Permanência deployment usable.
+services:
+  web:
+    environment:
+      SHC_CN3S_DATA_DIR: /data/CN3S
+      SHC_HYDROGRAPHY_DIR: /data/hydrography
+      SHC_STATES_PATH: /data/states/BR_UF_2022.shp
+    volumes:
+      - type: bind
+        source: ${SHC_CN3S_HOST_DIR:?Defina a pasta CN3S de trabalho no host}/stations
+        target: /data/CN3S/stations
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SHC_CN3S_HOST_DIR:?Defina a pasta CN3S de trabalho no host}/downloads
+        target: /data/CN3S/downloads
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SHC_FORECASTS_HOST_DIR:?Defina a pasta forecasts no host}
+        target: /data/CN3S/forecasts
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SHC_HYDROGRAPHY_HOST_DIR:?Defina a pasta BHO no host}
+        target: /data/hydrography
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SHC_STATES_HOST_DIR:?Defina a pasta BR_UF_2022 com os arquivos shapefile no host}
+        target: /data/states
+        read_only: true
+        bind:
+          create_host_path: false

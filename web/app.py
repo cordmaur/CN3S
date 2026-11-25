@@ -10,13 +10,14 @@ from threading import Lock
 from typing import Any
 
 from cachelib import FileSystemCache, SimpleCache
-from flask import Flask, Response, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, g, jsonify, redirect, render_template, request, session, url_for
 from flask_session import Session
+from werkzeug.wrappers import Response
 
 # Keep scientific plotting headless in development as well as in the image.
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from web import login, permanencia
+from web import cn3s, login, permanencia
 
 
 def create_app(config: dict[str, Any] | None = None) -> Flask:
@@ -48,9 +49,20 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         SHC_DURATION_CURVES_DIR=Path(
             os.environ.get(
                 "SHC_DURATION_CURVES_DIR",
-                "/data/CN3S/duration_curves",
+                "/data/CN3S/Exceedance",
             )
         ),
+        SHC_CN3S_DATA_DIR=Path(os.environ.get("SHC_CN3S_DATA_DIR", "/data/CN3S")),
+        SHC_STATES_PATH=Path(
+            os.getenv("SHC_STATES_PATH", "/data/Geospatial_BR_Data/BR_UF_2022/BR_UF_2022.shp")
+        ),
+        SHC_HYDROGRAPHY_DIR=Path(
+            os.environ.get(
+                "SHC_HYDROGRAPHY_DIR",
+                "/data/Geospatial_BR_Data/Hidrografia/BHO_2017_5k",
+            )
+        ),
+        SHC_CODE_REVISION=os.environ.get("SHC_CODE_REVISION", ""),
     )
     app.config.update(config or {})
     Session(app)
@@ -58,9 +70,11 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
     app.extensions["shc_catalog_cache"] = SimpleCache(threshold=1, default_timeout=0)
     app.extensions["shc_station_locks"] = {}
     app.extensions["shc_render_lock"] = Lock()
+    app.extensions["cn3s_lock"] = Lock()
     app.extensions["shc_run_id"] = secrets.token_urlsafe(16)
     app.register_blueprint(login.bp)
     app.register_blueprint(permanencia.bp)
+    app.register_blueprint(cn3s.bp)
 
     @app.before_request
     def check_session() -> Response | tuple[Response | str, int] | None:
@@ -71,11 +85,12 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
             Login redirect or error when access is invalid; otherwise None.
 
         """
-        if request.endpoint == "static":
-            response = None
+        # Browsers request this outside /shc, without its cookie; do not replace the login.
+        if request.endpoint == "static" or request.path == "/favicon.ico":
+            response = Response(status=204) if request.path == "/favicon.ico" else None
             filename = (request.view_args or {}).get("filename", "")
             if (
-                filename == "vendor/plotly-basic-3.1.0.min.js"
+                filename in {"vendor/plotly-basic-3.1.0.min.js", "vendor/plotly-4.1.1.min.js"}
                 and request.accept_encodings["gzip"] > 0
             ):
                 # Precompressed Plotly reduces transfers through IIS and the VPN.
@@ -87,7 +102,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         g.login = login.current_login()
         public = {"login.index", "login.start", "login.status", "login.logout", "static", "entry"}
         if request.endpoint and request.endpoint not in public and g.login["status"] != "signed_in":
-            if request.path.startswith("/shc/permanencia/"):
+            if request.path.startswith(("/shc/permanencia/", "/shc/cn3s/")):
                 return jsonify(
                     error="Sua sessão expirou. Entre novamente.", login_required=True
                 ), 401
@@ -125,7 +140,10 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
 
         """
         filename = (request.view_args or {}).get("filename", "")
-        if request.endpoint == "static" and filename == "vendor/plotly-basic-3.1.0.min.js":
+        if request.endpoint == "static" and filename in {
+            "vendor/plotly-basic-3.1.0.min.js",
+            "vendor/plotly-4.1.1.min.js",
+        }:
             response.vary.add("Accept-Encoding")
         if request.endpoint == "static" and filename.startswith("vendor/"):
             # Versioned public libraries can be reused across page loads, unlike user data.

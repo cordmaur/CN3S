@@ -30,7 +30,7 @@
 <a class="{{ 'active' if active == 'permanencia' else '' }}" href="{{ url_for('permanencia.index') }}">Curvas de Permanência</a>
 <a aria-disabled="true" tabindex="-1">Chuvas <small>Em breve</small>
 </a>
-<a aria-disabled="true" tabindex="-1">CN3S <small>Em breve</small>
+<a class="{{ 'active' if active == 'cn3s' else '' }}" href="{{ url_for('cn3s.index') }}">CN3S <small>Prova de conceito</small>
 </a>
 </nav>
 </header>

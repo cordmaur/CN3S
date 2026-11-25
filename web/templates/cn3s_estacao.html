@@ -1,0 +1,15 @@
+<section class="card">
+<h2>Criar Estação</h2>
+<p>Informe o código ANA para criar a bacia contribuinte, os metadados e o resumo das séries de cota e vazão.</p>
+<div class="cn-fields"><label>Código ANA<input id="cn-code" type="number" min="1" step="1" placeholder="29050000"></label></div>
+<button id="cn-prepare" type="button" disabled>Criar Estação</button>
+<p class="muted">A criação consulta o inventário e as séries Hidro/Telemetria. A chuva mensal e a calibração são preparadas em Calibrar Estação.</p>
+</section>
+<section class="card"><h2>Visão geral da estação</h2>
+<img id="cn-basin" class="cn-result-image" alt="Estação e bacia contribuinte sobre os estados brasileiros" hidden>
+<p id="cn-map-note" class="muted"></p>
+<h3>Séries hidrológicas</h3>
+<p class="muted">Estatísticas dos registros diários por fonte, antes da combinação das séries. Cota em cm; vazão em m³/s. Anos efetivos descontam as falhas; consistência indica registros consolidados.</p>
+<div id="cn-stats"></div>
+<button id="cn-refresh" type="button" disabled>Atualizar estatísticas</button>
+</section>
