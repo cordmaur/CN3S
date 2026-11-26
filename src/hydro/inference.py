@@ -177,19 +177,29 @@ class Inference:
         *,
         months_each_side: int = 6,
         anchor_to_observed: bool = False,
+        centered: bool = True,
+        previous_years: int = 2,
+        forecast_only: bool = False,
     ) -> PlotlyFigure:
         """
         Compare monthly observed and predicted discharge around the as-of month.
 
         Args:
             months_each_side: Number of calendar months on either side of the
-                as-of month; six gives a centered 13-month window.
+                as-of month; six gives a centered window of at least 13 months.
             anchor_to_observed: Shift each plotted forecast scenario by a constant
                 delta Q (m³/s) so its reference-month value equals the partial
                 observed mean for that month. Requires both values in that month.
                 Assumes the partial mean is representative and the bias persists
                 across the forecast horizon. Raw model results are unchanged;
                 shifted values are not clipped, even if they become negative.
+            centered: Center the window on the reference month. When false,
+                fold the forecast onto a January-to-December axis.
+            previous_years: Number of prior years to display, up to three.
+            forecast_only: Start the forecast curves at the first month influenced
+                by forecast rainfall after applying ACT. By default, include
+                simulations driven by antecedent rainfall from the reference
+                month, as in the notebook comparison.
 
         Returns:
             Plotly figure in m³/s. Stores discharge_monthly (mean and valid-day
@@ -197,10 +207,10 @@ class Inference:
             Historical statistics use monthly means from months before the as-of
             month, grouped by calendar month. Means use available daily values;
             gaps are not filled and no minimum coverage cutoff is imposed.
-            The current month's observed mean is explicitly partial. The band
+            The reference month's observed mean uses data through the reference day. The band
             represents historical variability, not forecast uncertainty.
-            The reference year and its two preceding years are overlaid by
-            calendar month, with month-only axis labels and source-year hovers.
+            Calendar-month observation overlays retain their source year in hovers.
+            Both window modes include the full ACT-adjusted forecast horizon.
             Call run_model and load_discharge first; this method performs no I/O.
 
         """
@@ -211,7 +221,7 @@ class Inference:
         current_month = as_of.to_period("M").to_timestamp()
         # Limit observations to the reference day, even when SQL returns more recent data.
         daily = self.discharge_daily.sort_index().loc[: as_of.normalize()]
-        self.discharge_monthly = daily.resample("MS").agg(["mean", "count"])
+        self.discharge_monthly = pd.DataFrame(daily.resample("MS").agg(["mean", "count"]))
         history = self.discharge_monthly.loc[self.discharge_monthly.index < current_month, "mean"]
         # Each year-month contributes one mean, rather than pooling unequal daily samples.
         groups = history.groupby(history.index.month)
@@ -223,13 +233,20 @@ class Inference:
                 "count": groups.count(),
             },
         )
+        # ACT can place antecedent-only simulations in the reference month.
+        # Start the forecast curves where the model first uses CDS rainfall.
+        first_prediction = current_month + pd.DateOffset(
+            months=self.params.act if forecast_only else 0
+        )
         return plot_monthly_discharge_comparison(
             self.discharge_monthly,
-            self.discharge_scenarios,
+            self.discharge_scenarios.loc[first_prediction:],
             self.discharge_monthly_stats,
             as_of=as_of,
             months_each_side=months_each_side,
             anchor_to_observed=anchor_to_observed,
+            centered=centered,
+            previous_years=previous_years,
         )
 
     def plot_discharge(self, *, colors: dict[int, str] | None = None) -> PlotlyFigure:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from itertools import pairwise
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,22 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import geopandas as gpd
+
+
+MONTH_LABELS = (
+    "jan",
+    "fev",
+    "mar",
+    "abr",
+    "mai",
+    "jun",
+    "jul",
+    "ago",
+    "set",
+    "out",
+    "nov",
+    "dez",
+)
 
 
 def load_forecast_grids(
@@ -350,6 +367,168 @@ def plot_discharge_comparison(
     return fig
 
 
+def monthly_discharge_window(
+    current: pd.Timestamp,
+    forecast_dates: pd.DatetimeIndex,
+    months_each_side: int,
+    *,
+    centered: bool,
+) -> pd.DatetimeIndex:
+    """
+    Calculate the display calendar for the centered or calendar-year view.
+
+    Args:
+        current: First day of the reference month.
+        forecast_dates: Available ACT-adjusted month starts on or after current.
+        months_each_side: Minimum number of months on each side of a centered window.
+        centered: Use a symmetric window including the forecast horizon.
+
+    Returns:
+        Month-start index covering the display window.
+
+    """
+    last_forecast = forecast_dates.max()
+    if centered:
+        # Expand both sides equally when the ACT-adjusted horizon extends the view.
+        lead = (last_forecast.year - current.year) * 12 + last_forecast.month - current.month
+        radius = max(months_each_side, int(lead)) if pd.notna(last_forecast) else months_each_side
+        start = current - pd.DateOffset(months=radius)
+        end = current + pd.DateOffset(months=radius)
+    else:
+        start = pd.Timestamp(current.year, 1, 1)
+        end = pd.Timestamp(current.year, 12, 1)
+    return pd.date_range(start, end, freq="MS")
+
+
+def add_monthly_scenario(
+    figure: go.Figure,
+    series: pd.Series,
+    *,
+    current: pd.Timestamp,
+    centered: bool,
+    label: str,
+    color: str,
+    hover: str,
+) -> None:
+    """
+    Plot a monthly scenario, breaking the line at New Year in the calendar view.
+
+    Args:
+        figure: Figure receiving the scenario traces.
+        series: Month-start discharge in m³/s, with any visual offset applied.
+        current: First day of the reference month, plotted at zero.
+        centered: Plot continuous dates or fold them onto January through December.
+        label: Scenario name shared by all segments.
+        color: Plotly color of the scenario.
+        hover: Template containing actual source dates and discharge units.
+
+    """
+    dates = pd.DatetimeIndex(series.index)
+    # Separate traces prevent a diagonal line from December back to January.
+    periods = [series] if centered else [values for _, values in series.groupby(dates.year)]
+    for i, values in enumerate(periods):
+        dates = pd.DatetimeIndex(values.index)
+        positions = dates.month - current.month
+        if centered:
+            positions += (dates.year - current.year) * 12
+        figure.add_scatter(
+            x=positions.tolist(),
+            y=values,
+            text=[f"{MONTH_LABELS[date.month - 1]}/{date.year}" for date in dates],
+            mode="lines+markers",
+            name=label,
+            legendgroup=label,
+            showlegend=i == 0,
+            line={"color": color, "width": 2, "dash": "dash"},
+            marker={"size": 8},
+            hovertemplate=hover,
+            connectgaps=False,
+        )
+
+
+def add_monthly_observation_years(
+    figure: go.Figure,
+    observed: pd.DataFrame,
+    months: pd.DatetimeIndex,
+    positions: list[int],
+    *,
+    current: pd.Timestamp,
+    previous_years: int,
+    hover: str,
+) -> None:
+    """
+    Plot the current year on its own dates and prior years by calendar month.
+
+    Args:
+        figure: Figure receiving the observation traces.
+        observed: Month-start mean discharge in m³/s and valid daily counts.
+        months: Month starts covered by the display window.
+        positions: Equally spaced positions for the display window.
+        current: First day of the reference month. Its mean uses data through cutoff.
+        previous_years: Number of prior years to include, up to three.
+        hover: Template with date and discharge.
+
+    """
+    observed_dates = pd.DatetimeIndex(observed.index)
+    for years_ago, color in (
+        (3, "#a75f20"),
+        (2, "green"),
+        (1, "blue"),
+        (0, "black"),
+    ):
+        if years_ago > previous_years:
+            continue
+        year = current.year - years_ago
+        annual = observed.loc[(observed_dates.year == year) & (observed_dates <= current)]
+        by_month = annual.set_axis(pd.DatetimeIndex(annual.index).month, axis="index")
+        # Match source calendar months to display slots regardless of the displayed year.
+        # Split at the calendar wrap instead of connecting December to that same year's January.
+        for segment, display_year in enumerate(months.year.unique()):
+            mask = months.year == display_year
+            calendar = months[mask]
+            values = (
+                annual.reindex(calendar)
+                if year == current.year
+                else by_month.reindex(calendar.month)
+            )
+            figure.add_scatter(
+                x=[position for position, show in zip(positions, mask, strict=True) if show],
+                y=values["mean"],
+                text=[f"{MONTH_LABELS[date.month - 1]}/{year}" for date in calendar],
+                customdata=values["count"],
+                mode="lines+markers",
+                name=str(year),
+                legendgroup=str(year),
+                showlegend=display_year == year if year == current.year else segment == 0,
+                line={
+                    "color": color,
+                    "width": 2.5 if year == current.year else 1.5,
+                    "dash": "solid",
+                },
+                marker={"size": 6 if year == current.year else 4},
+                opacity=1 if year == current.year else 0.65,
+                connectgaps=False,
+                hovertemplate=hover.replace("<extra>", "<br>%{customdata} dias com dados<extra>"),
+            )
+        if year < current.year:
+            # Join consecutive real months across the wrap, never December to its own January.
+            endpoints = pd.to_datetime([f"{year}-12-01", f"{year + 1}-01-01"])
+            bridge = observed.loc[observed.index < current, "mean"].reindex(endpoints)
+            if bridge.notna().all():
+                for position, month in zip(positions[1:], months[1:], strict=True):
+                    if month.month == 1:
+                        figure.add_scatter(
+                            x=[position - 1, position],
+                            y=bridge.values,
+                            mode="lines",
+                            line={"color": color, "width": 1.5, "dash": "solid"},
+                            opacity=0.65,
+                            legendgroup=str(year),
+                            showlegend=False,
+                            hoverinfo="skip",
+                        )
+
+
 def plot_monthly_discharge_comparison(
     observed: pd.DataFrame,
     simulated: pd.DataFrame,
@@ -358,6 +537,8 @@ def plot_monthly_discharge_comparison(
     as_of: pd.Timestamp,
     months_each_side: int,
     anchor_to_observed: bool = False,
+    centered: bool = True,
+    previous_years: int = 2,
 ) -> go.Figure:
     """
     Plot monthly means and historical percentiles on a centered monthly calendar.
@@ -374,33 +555,41 @@ def plot_monthly_discharge_comparison(
             equal to the partial observed mean minus the reference-month prediction.
             Requires observations and predictions for that same month. Only plotted
             forecasts change; no clipping or modification of simulated is performed.
+        centered: Use a symmetric window or fold forecast dates onto the
+            January-to-December axis, breaking curves at year boundaries.
+        previous_years: Include up to this many of the three prior observation years.
 
     Returns:
         Figure with equally spaced month slots, a historical P10-P90 band and
         separate observations and forecast scenarios. Missing months remain gaps.
-        The reference year and two previous years wrap by calendar month, with
-        December connected to January of the following source year when available.
-        Current-month observations are partial and are shown as an open marker.
+        Previous years align by calendar month. In the centered view, December
+        connects to January of the following source year when available.
+        The reference year ends at the mean through the observation cutoff.
 
     """
     current = as_of.to_period("M").to_timestamp()
-    months = pd.date_range(
-        current - pd.DateOffset(months=months_each_side),
-        current + pd.DateOffset(months=months_each_side),
-        freq="MS",
+    future = simulated.loc[simulated.index >= current].dropna(how="all")
+    months = monthly_discharge_window(
+        current, pd.DatetimeIndex(future.index), months_each_side, centered=centered
     )
-    # Equal month slots put the current month exactly at the center across year boundaries.
-    positions = list(range(-months_each_side, months_each_side + 1))
-    labels = months.strftime("%b %Y").tolist()
+    reference_index = months.tolist().index(current)
+    # Equal slots keep the reference month centered despite unequal month lengths.
+    positions = list(range(-reference_index, len(months) - reference_index))
+    labels = [f"{MONTH_LABELS[date.month - 1]}/{date.year}" for date in months]
     stats = monthly_stats.reindex(months.month)
     obs = observed.reindex(months)
-    predictions = simulated.loc[simulated.index >= current].reindex(months)
+    observed_mean = float(obs["mean"].astype(float).iloc[reference_index])
+    prediction_months = months
+    if not centered and not future.empty:
+        prediction_months = pd.date_range(current, future.index[-1], freq="MS")
+    predictions = future.reindex(prediction_months)
     if anchor_to_observed:
-        if pd.isna(obs.loc[current, "mean"]) or predictions.loc[current].isna().any():
+        reference = predictions.reindex([current]).iloc[0]
+        if not math.isfinite(observed_mean) or reference.isna().any():
             msg = "Anchoring requires observed and predicted discharge in the reference month."
             raise ValueError(msg)
         # A constant additive correction preserves each scenario's month-to-month changes.
-        offsets = obs.loc[current, "mean"] - predictions.loc[current]
+        offsets = observed_mean - reference
         predictions = predictions + offsets
     hover = "%{text}<br>%{y:,.0f} m³/s<extra>%{fullData.name}</extra>"
     fig = go.Figure()
@@ -436,63 +625,23 @@ def plot_monthly_discharge_comparison(
         connectgaps=False,
         hovertemplate=hover.replace("<extra>", "<br>%{customdata} meses históricos<extra>"),
     )
-    for year, color in (
-        (as_of.year - 2, "green"),
-        (as_of.year - 1, "blue"),
-        (as_of.year, "black"),
-    ):
-        annual = observed.loc[(observed.index.year == year) & (observed.index < current)]
-        annual = annual.set_axis(annual.index.month)
-        # Match source calendar months to display slots regardless of the displayed year.
-        # Split at the calendar wrap instead of connecting December to that same year's January.
-        for segment, display_year in enumerate(months.year.unique()):
-            mask = months.year == display_year
-            calendar = months[mask]
-            values = annual.reindex(calendar.month)
-            fig.add_scatter(
-                x=[position for position, show in zip(positions, mask, strict=True) if show],
-                y=values["mean"],
-                text=[f"{date:%b} {year}" for date in calendar],
-                customdata=values["count"],
-                mode="lines+markers",
-                name=str(year),
-                legendgroup=str(year),
-                showlegend=segment == 0,
-                line={
-                    "color": color,
-                    "width": 2.5 if year == as_of.year else 1.5,
-                    "dash": "solid" if year == as_of.year else "solid",
-                },
-                marker={"size": 6 if year == as_of.year else 4},
-                opacity=1 if year == as_of.year else 0.65,
-                connectgaps=False,
-                hovertemplate=hover.replace("<extra>", "<br>%{customdata} dias com dados<extra>"),
-            )
-        if year < as_of.year:
-            # Join consecutive real months across the wrap, never December to its own January.
-            endpoints = pd.to_datetime([f"{year}-12-01", f"{year + 1}-01-01"])
-            bridge = observed.loc[observed.index < current, "mean"].reindex(endpoints)
-            if bridge.notna().all():
-                for position, month in zip(positions[1:], months[1:], strict=True):
-                    if month.month == 1:
-                        fig.add_scatter(
-                            x=[position - 1, position],
-                            y=bridge.values,
-                            mode="lines",
-                            line={"color": color, "width": 1.5, "dash": "solid"},
-                            opacity=0.65,
-                            legendgroup=str(year),
-                            showlegend=False,
-                            hoverinfo="skip",
-                        )
-    if pd.notna(obs.loc[current, "mean"]):
+    add_monthly_observation_years(
+        fig,
+        observed,
+        months,
+        positions,
+        current=current,
+        previous_years=previous_years,
+        hover=hover,
+    )
+    if math.isfinite(observed_mean):
         fig.add_scatter(
             x=[0],
-            y=[obs.loc[current, "mean"]],
-            text=[current.strftime("%b %Y")],
+            y=[observed_mean],
+            text=[labels[reference_index]],
             customdata=[obs.loc[current, "count"]],
             mode="markers",
-            name=f"Observado parcial (até {as_of:%d/%m})",
+            name=f"Observado (até {as_of:%d/%m})",
             marker={"color": "black", "size": 11, "symbol": "circle-open"},
             hovertemplate=hover.replace("<extra>", "<br>%{customdata} dias com dados<extra>"),
         )
@@ -506,16 +655,14 @@ def plot_monthly_discharge_comparison(
                 "<extra>",
                 f"<br>ΔQ: {offsets[column]:+,.0f} m³/s<extra>",
             )
-        fig.add_scatter(
-            x=positions,
-            y=predictions[column],
-            text=labels,
-            mode="lines+markers",
-            name=f"{label} (ancorada)" if anchor_to_observed else label,
-            line={"color": color, "width": 2, "dash": "dash"},
-            marker={"size": 8},
-            hovertemplate=forecast_hover,
-            connectgaps=False,
+        add_monthly_scenario(
+            fig,
+            predictions[column],
+            current=current,
+            centered=centered,
+            label=f"{label} (ancorada)" if anchor_to_observed else label,
+            color=color,
+            hover=forecast_hover,
         )
     fig.add_vline(x=0, line_dash="dot", line_color="gray")
     fig.add_annotation(
@@ -534,8 +681,13 @@ def plot_monthly_discharge_comparison(
             "title": "",
             "tickmode": "array",
             "tickvals": positions,
-            "ticktext": months.strftime("%b").tolist(),
-            "range": [-months_each_side - 0.5, months_each_side + 0.5],
+            "ticktext": [
+                f"{MONTH_LABELS[date.month - 1]}<br>{date.year}"
+                if centered and (i == 0 or date.month == 1)
+                else MONTH_LABELS[date.month - 1]
+                for i, date in enumerate(months)
+            ],
+            "range": [positions[0] - 0.5, positions[-1] + 0.5],
         },
         yaxis={"title": "Vazão média mensal (m³/s)", "rangemode": "tozero"},
         legend={"orientation": "h", "y": -0.2, "x": 0},

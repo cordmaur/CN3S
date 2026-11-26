@@ -1,0 +1,546 @@
+<div id="previsao-cn3s" lang="pt-BR">
+  <header class="shc-header">
+    <div class="shc-brand">
+      <span class="shc-logo" aria-hidden="true">SHC</span>
+      <span>Sistema Hidrológico da COVEC</span>
+    </div>
+    <div class="shc-module">CN3S</div>
+  </header>
+  <main class="forecast-page">
+    <div class="forecast-nav" aria-label="Etapas CN3S">
+      <span>Estação</span><span>Calibrar Estação</span><span aria-current="page">Previsão</span>
+    </div>
+    <div class="page-title"><h1>Previsão</h1><span class="muted-copy">Dados ilustrativos</span></div>
+    <form id="forecast-form">
+      <section class="surface" aria-label="Estação e calibração">
+        <div class="field-row">
+          <label>Estação
+            <select id="forecast-station">
+              <option value="labrea">Lábrea · 13870000</option>
+              <option value="maraba" selected>Marabá · 29050000</option>
+              <option value="beruri">Beruri · 13990000</option>
+            </select>
+          </label>
+          <label>Calibração mensal<select id="forecast-calibration"></select></label>
+        </div>
+        <p id="forecast-no-calibration" class="muted-copy" role="status" hidden>Esta estação ainda não tem calibrações mensais compatíveis. Salve uma em Calibrar Estação.</p>
+        <div id="forecast-review">
+          <div class="review-heading">
+            <h2>Gráfico da calibração</h2>
+            <p id="forecast-calibration-meta" class="muted-copy"></p>
+          </div>
+          <div id="forecast-plot" class="plot">
+            <div class="plot-legend">
+              <span><i class="swatch rainfall"></i>Chuva MERGE</span>
+              <span><i class="swatch observed"></i>Vazão observada</span>
+              <span><i class="swatch modeled"></i>Vazão simulada</span>
+              <span><i class="swatch split"></i>Início do teste</span>
+            </div>
+            <svg id="forecast-graph" role="img" aria-labelledby="forecast-graph-label">
+              <title id="forecast-graph-label">Séries mensais ilustrativas da calibração selecionada</title>
+              <g id="forecast-graph-marks"></g>
+            </svg>
+          </div>
+          <div class="review-heading">
+            <h2>Parâmetros do modelo</h2>
+            <p id="forecast-basin-meta" class="muted-copy"></p>
+          </div>
+          <div class="parameters">
+            <table aria-label="Parâmetros da calibração selecionada">
+              <thead><tr>
+                <th scope="col">r0 (mm)</th><th scope="col">cn_i</th><th scope="col">alfa</th><th scope="col">beta</th>
+                <th scope="col">k0</th><th scope="col">k1</th><th scope="col">k2</th><th scope="col">act (meses)</th>
+              </tr></thead>
+              <tbody><tr id="forecast-parameters"></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface" aria-labelledby="forecast-setup-heading">
+        <h2 id="forecast-setup-heading">Configuração da previsão</h2>
+        <div class="field-row">
+          <label>Mês de inicialização CDS
+            <select id="forecast-cycle">
+              <option value="2026-11">Novembro de 2026</option>
+              <option value="2026-10" selected>Outubro de 2026</option>
+              <option value="2026-09" disabled>Setembro de 2026 · arquivos incompletos</option>
+            </select>
+          </label>
+          <label>Número de meses de previsão<select id="forecast-horizon"></select></label>
+        </div>
+        <div class="forecast-footer">
+          <p id="forecast-range" class="muted-copy" aria-live="polite"></p>
+          <button id="forecast-run" type="submit">Executar previsão mensal</button>
+        </div>
+      </section>
+    </form>
+    <section id="forecast-results" class="surface result-surface" aria-labelledby="forecast-result-heading">
+      <div class="review-heading">
+        <h2 id="forecast-result-heading">Vazão média mensal observada e prevista</h2>
+        <label class="anchor-option">
+          <input id="forecast-anchor" type="checkbox" aria-describedby="forecast-anchor-status" checked>
+          Ancorar ao observado
+        </label>
+      </div>
+      <p id="forecast-result-context" class="muted-copy" role="status"></p>
+      <div class="result-controls">
+        <fieldset class="history-years">
+          <legend>Anos anteriores</legend>
+          <label><input type="checkbox" value="2025" checked>2025</label>
+          <label><input type="checkbox" value="2024" checked>2024</label>
+          <label><input type="checkbox" value="2023">2023</label>
+        </fieldset>
+        <label class="anchor-option">
+          <input id="forecast-centered" type="checkbox" checked aria-describedby="forecast-window">
+          Centralizar no mês de referência
+        </label>
+      </div>
+      <p id="forecast-window" class="muted-copy" aria-live="polite"></p>
+      <p id="forecast-anchor-status" class="muted-copy" aria-live="polite"></p>
+      <svg id="forecast-result-graph" role="img" aria-labelledby="forecast-result-label forecast-result-description">
+        <title id="forecast-result-label">Vazão média mensal observada e prevista</title>
+        <desc id="forecast-result-description"></desc>
+        <g id="forecast-result-marks"></g>
+      </svg>
+      <div class="plot-legend result-legend">
+        <span><i class="swatch historical-band"></i>P10–P90 histórico</span>
+        <span><i class="swatch historical-median"></i>Mediana histórica mensal</span>
+        <span id="forecast-legend-2023" hidden><i class="swatch older-year"></i>2023 (ilustrativo)</span>
+        <span id="forecast-legend-2024"><i class="swatch past-year"></i>2024</span>
+        <span id="forecast-legend-2025"><i class="swatch previous-year"></i>2025</span>
+        <span><i class="swatch reference-year"></i>2026</span>
+        <span><i class="swatch partial-month"></i><span id="forecast-partial-label"></span></span>
+        <span><i class="swatch mean-rain"></i><span id="forecast-mean-label"></span></span>
+        <span><i class="swatch forecast-rain"></i><span id="forecast-rain-label"></span></span>
+      </div>
+    </section>
+  </main>
+</div>
+<style>
+#previsao-cn3s {
+  color-scheme: light dark;
+  --shc-bg: light-dark(#eef3f7, #151f2a);
+  --shc-paper: light-dark(#fff, #1e2c39);
+  --shc-ink: light-dark(#15354c, #e0edf6);
+  --shc-muted: light-dark(#536a7e, #b4c8d8);
+  --shc-line: light-dark(#dce5ec, #3b5061);
+  --shc-blue: light-dark(#145d83, #9cd7f6);
+  --shc-white: light-dark(#fff, #152431);
+  --shc-soft: light-dark(#eef5fa, #293e50);
+  --shc-observed: light-dark(#16557b, #8acaf2);
+  --shc-modeled: light-dark(#ad5018, #ffac76);
+  --shc-rain: light-dark(#88bdd9, #5c9cbc);
+  --result-band: light-dark(#e7ebee, #394b5a);
+  --result-median: light-dark(#6c7984, #a9bbca);
+  --result-past: light-dark(#287443, #7acb94);
+  --result-older: light-dark(#9a5b1b, #e8b373);
+  --result-previous: light-dark(#354fce, #99acff);
+  --result-current: light-dark(#17222c, #edf4fa);
+  --result-mean: light-dark(#81088d, #ea9bf2);
+  --result-forecast: light-dark(#c3202d, #ff8d97);
+  background: var(--shc-bg);
+  color: var(--shc-ink);
+  font: 14px/1.45 system-ui, sans-serif;
+}
+#previsao-cn3s * { box-sizing: border-box; }
+#previsao-cn3s [hidden] { display: none !important; }
+#previsao-cn3s .shc-header { background: var(--shc-paper); border-bottom: 1px solid var(--shc-line); padding: 14px clamp(14px, 3.6vw, 36px) 0; }
+#previsao-cn3s .shc-brand { display: flex; align-items: center; gap: 12px; font-weight: 650; }
+#previsao-cn3s .shc-logo { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border-radius: 10px; background: var(--shc-blue); color: var(--shc-white); }
+#previsao-cn3s .shc-module { width: fit-content; padding: 10px 2px 7px; border-bottom: 3px solid var(--shc-blue); color: var(--shc-blue); font-weight: 650; }
+#previsao-cn3s .forecast-page { padding: 16px clamp(14px, 3.6vw, 36px) 24px; }
+#previsao-cn3s .forecast-nav { display: flex; flex-wrap: wrap; gap: 6px 17px; color: var(--shc-muted); margin-bottom: 12px; }
+#previsao-cn3s .forecast-nav span { padding: 5px 0; font-size: 13px; }
+#previsao-cn3s .forecast-nav [aria-current] { color: var(--shc-blue); border-bottom: 2px solid; font-weight: 650; }
+#previsao-cn3s .page-title, #previsao-cn3s .review-heading, #previsao-cn3s .forecast-footer { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+#previsao-cn3s .page-title { margin-bottom: 12px; }
+#previsao-cn3s h1, #previsao-cn3s h2, #previsao-cn3s p { margin: 0; }
+#previsao-cn3s h1 { font-size: 26px; letter-spacing: -.4px; }
+#previsao-cn3s h2 { font-size: 16px; }
+#previsao-cn3s .muted-copy { color: var(--shc-muted); font-size: 13px; }
+#previsao-cn3s .surface { background: var(--shc-paper); border: 1px solid var(--shc-line); border-radius: 12px; padding: 16px; }
+#previsao-cn3s .surface + .surface { margin-top: 12px; }
+#previsao-cn3s .field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
+#previsao-cn3s .surface > h2 { margin-bottom: 10px; }
+#previsao-cn3s label { display: grid; gap: 4px; font-weight: 600; min-width: 0; }
+#previsao-cn3s select, #previsao-cn3s button { font: inherit; border: 1px solid var(--shc-line); padding: 8px 10px; border-radius: 7px; }
+#previsao-cn3s select { width: 100%; background: var(--shc-paper); color: var(--shc-ink); }
+#previsao-cn3s button { background: var(--shc-blue); color: var(--shc-white); border-color: var(--shc-blue); font-weight: 650; }
+#previsao-cn3s button:disabled, #previsao-cn3s select:disabled { opacity: .6; }
+#previsao-cn3s #forecast-review, #previsao-cn3s #forecast-no-calibration { margin-top: 14px; }
+#previsao-cn3s .plot { margin: 8px 0 14px; }
+#previsao-cn3s .plot-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--shc-muted); }
+#previsao-cn3s .plot-legend span { display: inline-flex; align-items: center; gap: 5px; }
+#previsao-cn3s .swatch { width: 15px; height: 0; border-top: 2px solid; }
+#previsao-cn3s .rainfall { border: 0; height: 8px; background: var(--shc-rain); }
+#previsao-cn3s .observed { color: var(--shc-observed); }
+#previsao-cn3s .modeled { color: var(--shc-modeled); border-top-style: dashed; }
+#previsao-cn3s .split { color: var(--shc-muted); border-top-style: dotted; }
+#previsao-cn3s #forecast-graph { display: block; width: 100%; height: 212px; margin-top: 6px; }
+#previsao-cn3s .graph-grid { stroke: var(--shc-line); }
+#previsao-cn3s .graph-label { fill: var(--shc-muted); font-size: 11px; }
+#previsao-cn3s .graph-rain { fill: var(--shc-rain); }
+#previsao-cn3s .graph-observed, #previsao-cn3s .graph-modeled { fill: none; stroke-width: 2; }
+#previsao-cn3s .graph-observed { stroke: var(--shc-observed); }
+#previsao-cn3s .graph-modeled { stroke: var(--shc-modeled); stroke-dasharray: 5 3; }
+#previsao-cn3s .graph-split { stroke: var(--shc-muted); stroke-dasharray: 2 4; }
+#previsao-cn3s .parameters { overflow-x: auto; margin-top: 7px; }
+#previsao-cn3s table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+#previsao-cn3s th, #previsao-cn3s td { padding: 6px 10px; text-align: center; white-space: nowrap; border-bottom: 1px solid var(--shc-line); }
+#previsao-cn3s th { background: var(--shc-soft); }
+#previsao-cn3s .forecast-footer { margin-top: 12px; align-items: center; gap: 10px; }
+#previsao-cn3s .result-surface { margin-top: 12px; }
+#previsao-cn3s .result-surface h2 { font-size: 19px; }
+#previsao-cn3s .anchor-option, #previsao-cn3s .history-years label { display: inline-flex; align-items: center; gap: 7px; }
+#previsao-cn3s .result-surface input { margin: 0; accent-color: var(--shc-blue); width: 16px; height: 16px; }
+#previsao-cn3s .result-controls { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; column-gap: 16px; row-gap: 6px; margin: 10px 0 5px; }
+#previsao-cn3s .history-years { display: flex; flex-wrap: wrap; gap: 5px 14px; border: 0; padding: 0; margin: 0; }
+#previsao-cn3s .history-years legend { padding: 0; font-size: 13px; color: var(--shc-muted); }
+#previsao-cn3s #forecast-result-context { margin-top: 4px; }
+#previsao-cn3s #forecast-anchor-status { margin-top: 2px; }
+#previsao-cn3s #forecast-result-graph { display: block; width: 100%; height: 480px; margin: 6px 0 10px; }
+#previsao-cn3s .result-legend { row-gap: 7px; }
+#previsao-cn3s .historical-band { color: var(--result-band); border-top-width: 6px; }
+#previsao-cn3s .historical-median { color: var(--result-median); border-top-style: dashed; }
+#previsao-cn3s .past-year { color: var(--result-past); }
+#previsao-cn3s .older-year { color: var(--result-older); }
+#previsao-cn3s .previous-year { color: var(--result-previous); }
+#previsao-cn3s .reference-year { color: var(--result-current); }
+#previsao-cn3s .partial-month { color: var(--result-current); border: 1.5px solid; border-radius: 50%; width: 10px; height: 10px; }
+#previsao-cn3s .mean-rain { color: var(--result-mean); border-top-style: dashed; }
+#previsao-cn3s .forecast-rain { color: var(--result-forecast); border-top-style: dashed; }
+#previsao-cn3s .result-band { fill: var(--result-band); }
+#previsao-cn3s .result-line { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+#previsao-cn3s .reference-year.result-line { stroke-width: 2.2; }
+#previsao-cn3s :is(.historical-median, .mean-rain, .forecast-rain).result-line { stroke-dasharray: 5 4; }
+#previsao-cn3s :is(.mean-rain, .forecast-rain).result-line { stroke-width: 2; }
+#previsao-cn3s .result-dot { fill: currentColor; }
+#previsao-cn3s .result-partial { fill: none; stroke: var(--result-current); stroke-width: 1.3; }
+@media (max-width: 560px) {
+  #previsao-cn3s .field-row { grid-template-columns: minmax(0, 1fr); }
+  #previsao-cn3s .surface { padding: 12px; }
+  #previsao-cn3s #forecast-result-graph { height: 400px; }
+}
+@media (pointer: coarse) {
+  #previsao-cn3s select, #previsao-cn3s button { min-height: 44px; font-size: 16px; }
+  #previsao-cn3s .anchor-option, #previsao-cn3s .history-years label { min-height: 44px; }
+}
+</style>
+<script>
+(() => {
+  const root = document.getElementById('previsao-cn3s');
+  const byId = name => root.querySelector('#forecast-' + name);
+  const station = byId('station'), calibration = byId('calibration');
+  const cycle = byId('cycle'), horizon = byId('horizon');
+  const graph = byId('graph'), marks = byId('graph-marks');
+  const results = byId('results'), anchor = byId('anchor');
+  const centered = byId('centered');
+  const yearOptions = [...root.querySelectorAll('.history-years input')];
+  const resultGraph = byId('result-graph'), resultMarks = byId('result-marks');
+  let result;
+  const number = new Intl.NumberFormat('pt-BR', {maximumFractionDigits: 5});
+  const month = new Intl.DateTimeFormat('pt-BR', {month: 'short', year: 'numeric', timeZone: 'UTC'});
+  const stations = {
+    labrea: [
+      {name: 'Ajuste de k0 e beta', date: '26/11/2026', objective: 'PlainNSE', params: [218.4, 42.7, 0.21, 0.0031, 0.98, 0.316, 0.305, 1], area: 226190, warmup: 3, phase: 0.2, error: 0.10, scale: 1, testMonths: 9},
+      {name: 'Treino mensal de referência', date: '25/11/2026', objective: 'ExtremeFlowBlend', params: [274.1, 38.6, 0.19, 0.0028, 0.91, 0.341, 0.281, 0], area: 226190, warmup: 3, phase: 0.2, error: 0.29, scale: 1, testMonths: 10},
+    ],
+    maraba: [
+      {name: 'PlainNSE_alfa_livre', date: '25/11/2026', objective: 'PlainNSE', params: [312.6, 51.2, 0.17, 0.0042, 0.86, 0.28, 0.32, 0], area: 704300, warmup: 4, phase: 0.8, error: 0.15, scale: 1.45, testMonths: 12},
+    ],
+    beruri: [],
+  };
+  const calendars = {
+    '2026-11': ['2026-11', '2026-12', '2027-01', '2027-02', '2027-03'],
+    '2026-10': ['2026-10', '2026-11', '2026-12', '2027-01', '2027-02', '2027-03'],
+  };
+  const calibrationStart = 2010, calibrationEnd = 2024;
+  const calibrationMonths = (calibrationEnd - calibrationStart + 1) * 12;
+
+  // Séries da figura mensal sem ancoragem do notebook 05, arredondadas ao m³/s.
+  const marabaOctober = {
+    p10: [15776, 10047, 5455, 3647, 2588, 1788, 2015, 2819, 4275, 6618, 11419, 16078, 15776],
+    p90: [27378, 20911, 10139, 6027, 4139, 3092, 3498, 5606, 10621, 20541, 26869, 27279, 27378],
+    median: [21935, 14298, 7310, 4997, 3462, 2654, 2809, 3870, 6997, 12547, 16871, 20305, 21935],
+    past: [17439, 10086, 5446, 2982, 1668, 1438, 1258, 2449, 4090, 3833, 11150, 14306, 17439],
+    previous: [13039, 8996, 5788, 4307, 2575, 1590, 1088, 1040, 3541, 10452, 16153, 18243, 13039],
+    current: [17535, 10529, 5198, 3316, 2022, 1364, null, null, null, 5227, 7328, 17924, 17535],
+    bridges: [[4090, 10452], [3541, 5227]],
+    older: [16000, 9230, 5020, 2750, 1950, 1570, 1420, 2140, 4120, 5100, 11600, 15340, 16000],
+    partial: 1337,
+    average: [2389, 3884, 7005, 11458, 16985, 19025],
+    forecast: [2389, 3772, 5807, 8438, 12327, 13463],
+  };
+
+  function selectedRun() {
+    return calibration.value ? stations[station.value][Number(calibration.value) - 1] : null;
+  }
+
+  function mark(type, attributes, label, target = marks) {
+    const element = document.createElementNS('http://www.w3.org/2000/svg', type);
+    for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
+    if (label !== undefined) element.textContent = label;
+    target.append(element);
+  }
+
+  function drawChart() {
+    const run = selectedRun();
+    const width = graph.clientWidth;
+    marks.replaceChildren();
+    if (!run || width === 0) return;
+    const left = 52, right = width - 10, bottom = 188;
+    const step = (right - left) / calibrationMonths;
+    const x = index => left + (index + 0.5) * step;
+    const xTick = index => left + index * step;
+    const topFlow = 99;
+    const upper = run.scale === 1 ? 6000 : 9000;
+    const y = flow => bottom - flow / upper * (bottom - topFlow);
+    const axisText = (x, y, label, anchor = 'start') => mark('text', {x, y, 'text-anchor': anchor, class: 'graph-label'}, label);
+    axisText(0, 12, 'Chuva (mm/mês)');
+    axisText(0, 87, 'Vazão (m³/s)');
+    for (const rain of [0, 200, 400]) {
+      const row = 21 + rain / 400 * 48;
+      mark('line', {x1: left, x2: right, y1: row, y2: row, class: 'graph-grid'});
+      axisText(left - 7, row + 4, String(rain), 'end');
+    }
+    for (const flow of [0, upper / 2, upper]) {
+      mark('line', {x1: left, x2: right, y1: y(flow), y2: y(flow), class: 'graph-grid'});
+      axisText(left - 7, y(flow) + 4, number.format(flow), 'end');
+    }
+
+    const observed = [], simulated = [];
+    for (let index = 0; index < calibrationMonths; index += 1) {
+      const angle = index * Math.PI / 6 + run.phase;
+      const seasonal = Math.pow((1 + Math.cos(angle)) / 2, 1.6);
+      const rain = 18 + 325 * seasonal + 25 * (1 + Math.sin(index * 2.1));
+      mark('rect', {x: x(index) - step * 0.35, y: 21, width: step * 0.7, height: rain / 400 * 48, class: 'graph-rain'});
+      const streamflow = run.scale * (750 + 3850 * Math.pow((1 + Math.cos(angle - 0.8)) / 2, 1.7) + 240 * Math.sin(index * 1.2));
+      const modeled = streamflow * (1 + run.error * Math.cos(index * 0.76 + 0.4)) + 95 * Math.sin(index);
+      observed.push(`${x(index)},${y(streamflow)}`);
+      simulated.push(`${x(index)},${y(modeled)}`);
+    }
+    const testStart = calibrationMonths - run.testMonths;
+    mark('line', {x1: xTick(testStart), x2: xTick(testStart), y1: 20, y2: bottom, class: 'graph-split'});
+    mark('polyline', {points: observed.join(' '), class: 'graph-observed'});
+    mark('polyline', {points: simulated.join(' '), class: 'graph-modeled'});
+    const yearsBetweenTicks = width < 520 ? 7 : 4;
+    for (let year = calibrationStart; year <= calibrationEnd; year += yearsBetweenTicks) {
+      axisText(xTick((year - calibrationStart) * 12) + 2, 207, String(year));
+    }
+    if ((calibrationEnd - calibrationStart) % yearsBetweenTicks !== 0) {
+      axisText(right, 207, String(calibrationEnd), 'end');
+    }
+  }
+
+  function refreshCalibration() {
+    const run = selectedRun();
+    byId('no-calibration').hidden = Boolean(run);
+    byId('review').hidden = !run;
+    byId('run').disabled = !run || !horizon.value;
+    results.hidden = true;
+    if (!run) return;
+    byId('calibration-meta').textContent = `Período completo · jan/${calibrationStart} a dez/${calibrationEnd} · ${run.objective}`;
+    byId('basin-meta').textContent = `Área calibrada ${number.format(run.area)} km² · Aquecimento ${run.warmup} meses`;
+    byId('parameters').replaceChildren(...run.params.map(value => {
+      const cell = document.createElement('td');
+      cell.textContent = number.format(value);
+      return cell;
+    }));
+    drawChart();
+  }
+
+  function refreshStation() {
+    const runs = stations[station.value];
+    calibration.replaceChildren(...runs.map((run, index) =>
+      new Option(`${run.name} · ${run.date} · ${run.objective}`, index + 1),
+    ));
+    if (!runs.length) calibration.add(new Option('Nenhuma calibração mensal disponível', ''));
+    calibration.disabled = !runs.length;
+    refreshCalibration();
+  }
+
+  function monthLabel(value) {
+    const date = new Date(value + '-01T00:00:00Z');
+    const [m, y] = month.formatToParts(date).filter(part => part.type !== 'literal');
+    return m.value.replace('.', '') + '/' + y.value;
+  }
+
+  function refreshRange() {
+    const months = calendars[cycle.value];
+    const count = Number(horizon.value);
+    const first = monthLabel(months[0]), last = monthLabel(months[count - 1]);
+    byId('range').textContent = 'Período da chuva prevista: ' + (count === 1 ? first : first + ' a ' + last);
+    results.hidden = true;
+  }
+
+  function refreshCycle() {
+    const previous = Number(horizon.value) || 6;
+    const months = calendars[cycle.value];
+    horizon.replaceChildren(...months.map((_, index) => {
+      const count = index + 1;
+      return new Option(count + (count === 1 ? ' mês' : ' meses'), count);
+    }));
+    horizon.value = String(Math.min(previous, months.length));
+    refreshRange();
+  }
+
+  function showResult() {
+    const run = selectedRun();
+    const notebook = station.value === 'maraba' && cycle.value === '2026-10';
+    result = {
+      cycle: cycle.value,
+      months: Number(horizon.value),
+      lag: run.params[7],
+      scale: station.value === 'maraba' ? 1 : 0.55,
+      day: notebook ? '13/10' : cycle.value === '2026-11' ? '26/11' : '31/10',
+    };
+    results.hidden = false;
+    byId('result-context').textContent = station.selectedOptions[0].text
+      + (notebook ? ' · Exemplo do notebook 05' : ' · Séries ilustrativas')
+      + ' · ' + result.months + (result.months === 1 ? ' mês de previsão' : ' meses de previsão');
+    byId('partial-label').textContent = 'Observado até ' + result.day;
+    anchor.disabled = result.lag > 0;
+    if (anchor.disabled) anchor.checked = false;
+    drawResult();
+  }
+
+  function drawResult() {
+    const width = resultGraph.clientWidth;
+    if (!result || !width) return;
+    resultMarks.replaceChildren();
+    const anchored = anchor.checked && !anchor.disabled;
+    const canAnchor = !anchor.disabled;
+    byId('anchor-status').textContent = canAnchor
+      ? (anchored ? 'Deslocamento aplicado às duas curvas do gráfico.' : 'Curvas exibidas com os valores originais da simulação.')
+      : 'Ancoragem indisponível. O ACT desloca a primeira previsão de vazão para depois do mês de referência.';
+    const suffix = anchored ? ' (ancorada)' : '';
+    const scenarioLabels = ['Previsão (chuva média)', 'Previsão (chuva prevista)'].map(label => label + suffix);
+    byId('mean-label').textContent = scenarioLabels[0];
+    byId('rain-label').textContent = scenarioLabels[1];
+    const referenceMonth = Number(result.cycle.slice(5)) - 1;
+    const lastForecastMonth = referenceMonth + result.lag + result.months - 1;
+    const halfWindow = Math.max(6, lastForecastMonth - referenceMonth);
+    const firstMonth = centered.checked ? referenceMonth - halfWindow : 0;
+    const lastMonth = centered.checked ? referenceMonth + halfWindow : Math.max(11, lastForecastMonth);
+    const monthCount = lastMonth - firstMonth + 1;
+    const monthSlots = Array.from({length: monthCount}, (_, index) => firstMonth + index);
+    const referenceIndex = referenceMonth - firstMonth;
+    const monthNames = monthSlots.map(slot => monthLabel(new Date(Date.UTC(2026, slot, 1)).toISOString().slice(0, 7)));
+    const windowLabel = centered.checked
+      ? monthCount + ' meses centrados em ' + monthLabel(result.cycle)
+      : 'Janela de ' + monthNames[0] + ' a ' + monthNames.at(-1);
+    const selectedYears = yearOptions.filter(option => option.checked).map(option => Number(option.value));
+    yearOptions.forEach(option => { byId('legend-' + option.value).hidden = !option.checked; });
+    byId('window').textContent = windowLabel + '.';
+    byId('result-description').textContent = windowLabel + '. Anos exibidos ' + [2026, ...selectedYears].join(', ')
+      + '. Faixa de variabilidade histórica, vazões observadas e dois cenários de previsão. ' + byId('anchor-status').textContent;
+
+    const fixture = marabaOctober;
+    const isOctober = result.cycle === '2026-10';
+    const fixtureIndex = slot => ((slot + 9) % 12 + 12) % 12;
+    const historical = values => monthSlots.map(slot => {
+      const value = values[fixtureIndex(slot)];
+      return value === null ? null : Math.round(value * result.scale);
+    });
+    const partial = Math.round((isOctober ? fixture.partial : fixture.previous[7]) * result.scale);
+    const scenarios = [fixture.average, fixture.forecast].map(values => {
+      const offset = anchored ? partial - Math.round(values[0] * result.scale) : 0;
+      return monthSlots.map(slot => {
+        const lead = slot - referenceMonth - result.lag;
+        return lead >= 0 && lead < result.months ? Math.round(values[lead] * result.scale) + offset : null;
+      });
+    });
+    const median = historical(fixture.median);
+    const current = [...fixture.current];
+    if (!isOctober) current[6] = 1625;
+    const observed = [
+      {year: 2023, values: fixture.older, style: 'older-year'},
+      {year: 2024, values: fixture.past, style: 'past-year', bridge: fixture.bridges[0]},
+      {year: 2025, values: fixture.previous, style: 'previous-year', bridge: fixture.bridges[1]},
+      {year: 2026, values: current, style: 'reference-year'},
+    ].filter(series => series.year === 2026 || selectedYears.includes(series.year));
+    const p10 = historical(fixture.p10), p90 = historical(fixture.p90);
+
+    const left = 44, right = width - 8, top = 48, bottom = resultGraph.clientHeight - 40;
+    const x = index => left + (index + 0.5) / monthCount * (right - left);
+    const maximum = result.scale === 1 ? 29000 : 16000;
+    const tickStep = result.scale === 1 ? 5000 : 4000;
+    const y = value => bottom - value / maximum * (bottom - top);
+    const create = (type, attrs, label) => mark(type, attrs, label, resultMarks);
+    const axisLabel = (x, y, text, anchor = 'start') => create('text', {x, y, 'text-anchor': anchor, class: 'graph-label'}, text);
+    const point = (index, value) => x(index) + ',' + y(value);
+    for (let tick = 0; tick <= maximum; tick += tickStep) {
+      create('line', {x1: left, x2: right, y1: y(tick), y2: y(tick), class: 'graph-grid'});
+      axisLabel(left - 5, y(tick) + 4, number.format(tick), 'end');
+    }
+    axisLabel(0, 14, 'Vazão média mensal (m³/s)');
+    const newYearIndex = monthSlots.indexOf(12);
+    monthNames.forEach((label, index) => {
+      if (width < 530 && (index - Math.max(0, newYearIndex)) % 2 !== 0) return;
+      create('line', {x1: x(index), x2: x(index), y1: top, y2: bottom, class: 'graph-grid'});
+      axisLabel(x(index), bottom + 17, label.split('/')[0], 'middle');
+      if (monthSlots[index] === 12) axisLabel(x(index), bottom + 32, '2027', 'middle');
+    });
+    create('polygon', {points: [...p90.map((v, i) => point(i, v)), ...p10.map((v, i) => point(i, v)).reverse()].join(' '), class: 'result-band'});
+    create('line', {x1: x(referenceIndex), x2: x(referenceIndex), y1: top, y2: bottom, class: 'graph-split'});
+    axisLabel(x(referenceIndex), 39, result.cycle.slice(5) + '/2026', 'middle');
+
+    function line(values, className, radius = 0) {
+      // Uma lacuna de observação quebra a curva mensal.
+      const path = values.map((value, i) => value === null ? '' : (values[i - 1] == null ? 'M' : 'L') + point(i, value)).join(' ');
+      create('path', {d: path, class: className + ' result-line'});
+      if (radius) values.forEach((value, i) => {
+        if (value !== null) create('circle', {cx: x(i), cy: y(value), r: radius, class: className + ' result-dot', 'data-value': value});
+      });
+    }
+    line(median, 'historical-median');
+    observed.forEach(series => {
+      const values = historical(series.values);
+      if (newYearIndex < 0 || series.year === 2026) {
+        line(values, series.style, 2);
+        return;
+      }
+      // O exemplo do notebook liga dezembro ao janeiro seguinte quando o par está disponível.
+      line(values.slice(0, newYearIndex), series.style, 2);
+      if (series.bridge) {
+        const bridge = series.bridge.map(value => Math.round(value * result.scale));
+        line([...Array(newYearIndex - 1).fill(null), ...bridge], series.style);
+      }
+      line([...Array(newYearIndex).fill(null), ...values.slice(newYearIndex)], series.style, 2);
+    });
+    scenarios.forEach((values, index) => line(values, ['mean-rain', 'forecast-rain'][index], 3.6));
+    create('circle', {cx: x(referenceIndex), cy: y(partial), r: 5.1, class: 'result-partial', 'data-value': partial});
+    const columnWidth = (right - left) / monthCount;
+    monthNames.forEach((label, index) => {
+      const hover = [label, 'Mediana ' + number.format(median[index]) + ' m³/s'];
+      if (index === referenceIndex) hover.push('Observado ' + number.format(partial) + ' m³/s');
+      observed.forEach(series => {
+        const value = series.values[fixtureIndex(monthSlots[index])];
+        if (value != null) hover.push(series.year + ' · ' + number.format(Math.round(value * result.scale)) + ' m³/s');
+      });
+      scenarios.forEach((values, i) => {
+        if (values[index] != null) hover.push(scenarioLabels[i] + ' ' + number.format(values[index]) + ' m³/s');
+      });
+      create('rect', {x: x(index) - columnWidth / 2, y: top, width: columnWidth, height: bottom - top, fill: 'transparent', 'data-tooltip': hover.join(' · ')});
+    });
+  }
+
+  station.addEventListener('change', refreshStation);
+  calibration.addEventListener('change', refreshCalibration);
+  cycle.addEventListener('change', refreshCycle);
+  horizon.addEventListener('change', refreshRange);
+  anchor.addEventListener('change', drawResult);
+  centered.addEventListener('change', drawResult);
+  yearOptions.forEach(option => option.addEventListener('change', drawResult));
+  byId('form').addEventListener('submit', event => {
+    event.preventDefault();
+    showResult();
+  });
+  refreshCycle();
+  refreshStation();
+  showResult();
+  new ResizeObserver(drawChart).observe(graph);
+  new ResizeObserver(drawResult).observe(resultGraph);
+})();
+</script>

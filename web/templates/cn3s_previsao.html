@@ -1,16 +1,38 @@
-<section class="card"><h2>Calibração selecionada</h2><label for="cn-calibration-select">Parâmetros salvos · somente frequência mensal</label><select id="cn-calibration-select"><option value="">Selecione uma estação primeiro</option></select>
-<div id="cn-calibration-info" class="cn-summary"></div>
-<details><summary>Parâmetros selecionados</summary><dl id="cn-parameter-values" class="cn-fields"></dl></details>
+<section class="card">
+  <h2>Previsão</h2>
+  <div class="forecast-fields">
+    <label for="cn-station">Estação {{ station_select() }}</label>
+    <label for="cn-calibration-select">Calibração mensal
+      <select id="cn-calibration-select" disabled><option value="">Selecione uma estação</option></select>
+    </label>
+  </div>
+  <p id="cn-station-info" class="muted" role="status"></p>
+  <div id="cn-calibration-review" hidden>
+    <h3>Gráfico da calibração</h3>
+    <p id="cn-calibration-chart-status" class="muted" role="status"></p>
+    <div id="cn-calibration-chart" aria-label="Chuva e vazão no período completo da calibração"></div>
+    <h3>Parâmetros do modelo</h3>
+    <p id="cn-calibration-info" class="muted"></p>
+    <div class="cn-table-wrap">
+      <table aria-label="Parâmetros da calibração selecionada">
+        <thead><tr>{% for key in bounds %}<th scope="col">{{ key }}{% if key == 'r0' %} (mm){% elif key == 'act' %} (meses){% endif %}</th>{% endfor %}</tr></thead>
+        <tbody><tr id="cn-parameter-values">{% for key in bounds %}<td data-parameter="{{ key }}"></td>{% endfor %}</tr></tbody>
+      </table>
+    </div>
+  </div>
 </section>
-<section class="card" id="cn-rain">
-<h2>Previsão · Chuva prevista</h2>
-<div class="cn-fields"><label>Inicialização CDS<select id="cn-cycle"><option value="">Consultando arquivos…</option></select></label>
-<label>Data de referência<input id="cn-as-of" type="date" value="2026-10-13"></label>
-<label>Meses de chuva<select id="cn-months"></select></label></div>
-<div id="cn-cycle-info" class="cn-summary"></div>
-<details><summary>Modelos e convenções científicas</summary><p>{{ models.values()|join(' · ') }}</p>
-<p>A correção usa a média das razões previsão/hindcast na bacia, multiplicada pela climatologia observada. A mediana entre modelos define um cenário de chuva, não uma mediana de vazão. Os totais CDS brutos equivalem a 30 dias.</p>
-<p>A data de referência seleciona meses; não congela fontes online. Observações recentes podem ser parciais ou estar em cache. Os arquivos CDS são preparados pelo notebook 03.</p></details>
-<p id="cn-ready" class="cn-summary">Selecione estação, calibração e ciclo.</p>
-<button id="cn-run" type="button" disabled>Executar previsão mensal</button>
+<section class="card">
+  <h2>Configuração da previsão</h2>
+  <div class="forecast-fields">
+    <label>Mês de inicialização CDS<select id="cn-cycle" disabled><option value="">Consultando arquivos…</option></select></label>
+    <label>Número de meses de previsão<select id="cn-months" disabled></select></label>
+  </div>
+  <p id="cn-cycle-info" class="muted" role="status"></p>
+  <p id="cn-ready" class="muted" role="status"></p>
+  <button id="cn-run" type="button" aria-describedby="cn-ready" disabled>Executar previsão mensal</button>
+  <p id="cn-progress" class="cn-notice forecast-run-status" role="status" aria-live="polite" hidden></p>
+  <p id="cn-error" class="cn-notice forecast-run-status" role="alert" hidden></p>
+  <details><summary>Modelos e convenções científicas</summary><p>{{ models.values()|join(' · ') }}</p>
+  <p>A correção usa a média das razões previsão/hindcast na bacia, multiplicada pela climatologia observada. A mediana entre modelos define o cenário de chuva prevista. Os totais CDS brutos equivalem a 30 dias.</p>
+  <p>O corte da vazão observada é mostrado nos resultados. Em ciclos históricos, o corte pode incluir observações posteriores à inicialização do CDS. Os arquivos CDS são preparados pelo notebook 03.</p></details>
 </section>

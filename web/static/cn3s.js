@@ -6,7 +6,7 @@
   if (!workspace) return;
   const step = workspace.dataset.step;
   const csrf = document.querySelector('meta[name="csrf-token"]').content;
-  let station = null, forecastCycles = [], busy = false, selection = 0;
+  let selection = 0;
   const number = value => value == null ? 'indisponível' : Number(value).toLocaleString('pt-BR', {maximumFractionDigits: 4});
   function error(message = '') { $('cn-error').textContent = message; $('cn-error').hidden = !message; }
   async function api(path, payload) {
@@ -21,18 +21,6 @@
     return data;
   }
   function option(value, text, disabled = false) { const node = new Option(text, value); node.disabled = disabled; return node; }
-  function clearResults() {
-    document.querySelectorAll('#cn-charts .cn-chart').forEach(node => Plotly.purge(node));
-    $('cn-charts').replaceChildren(); $('cn-results').hidden = true;
-  }
-  function setBusy(value) {
-    busy = value;
-    document.querySelectorAll('#cn-controls input, #cn-controls select, #cn-controls button').forEach(node => { node.disabled = value; });
-    document.querySelectorAll('.cn-section-nav a').forEach(node => { node.setAttribute('aria-disabled', String(value)); });
-    $('cn-progress').hidden = !value;
-    if ($('cn-input-download')) $('cn-input-download').hidden = value || !station?.series.rain || !station?.series.discharge;
-    if (!value) readiness();
-  }
   function addTable(parent, title, data) {
     const heading = document.createElement('h3'); heading.textContent = title; parent.append(heading);
     const wrapper = document.createElement('div'); wrapper.className = 'cn-table-wrap';
@@ -695,67 +683,6 @@
       }
     }
   }
-  function calibrationInfo() {
-    if (!$('cn-calibration-select')) { readiness(); return; }
-    const selected = station?.calibrations.find(c => c.id === $('cn-calibration-select').value);
-    const node = $('cn-calibration-info'); node.textContent = '';
-    $('cn-parameter-values').replaceChildren();
-    if (selected) {
-      const m = selected.metadata, p = selected.params, scores = m.final_metrics || {};
-      for (const name of ['r0', 'cn_i', 'alfa', 'beta', 'k0', 'k1', 'k2', 'act']) {
-        const group = document.createElement('div'), term = document.createElement('dt'), value = document.createElement('dd');
-        term.textContent = name + (name === 'r0' ? ' (mm)' : name === 'act' ? ' (meses)' : '');
-        value.textContent = number(p[name]); group.append(term, value); $('cn-parameter-values').append(group);
-      }
-      node.textContent = `Área calibrada: ${number(p.area)} km² · ACT: ${p.act} meses · Aquecimento: ${p.warmup_steps} meses · Objetivo: ${m.objective?.name} · Treino: ${number(m.train_ratio * 100)}% · Estado do solver: ${m.status}. NSE treino: ${number(scores.train_nse)}; validação: ${number(scores.test_nse)}. Objetivo treino: ${number(scores.train_objective)}; validação: ${number(scores.test_objective)}.`;
-      if (p.area !== station.metadata.drainage_area) node.append(' A área calibrada difere da área atual do inventário; a simulação preserva a área calibrada.');
-      node.append(' Avalie a habilidade fora do treino; esta prova de conceito demonstra a integração e não valida previsões.');
-    }
-    readiness();
-  }
-  function readiness() {
-    if (busy) return;
-    const cycle = forecastCycles.find(c => c.id === $('cn-cycle')?.value);
-    if ($('cn-calibrate')) $('cn-calibrate').disabled = !station?.series.rain || !station?.series.discharge;
-    for (const name of ['rain', 'discharge']) {
-      if ($(`cn-save-${name}`)) $(`cn-save-${name}`).disabled = !station?.basin || !$('cn-replace').checked;
-    }
-    if (step !== 'previsao') return;
-    let reason = '';
-    if (!station?.basin || !station?.series.rain) reason = 'Prepare a bacia e a chuva mensal.';
-    else if (!$('cn-calibration-select').value) reason = 'Selecione uma calibração mensal compatível.';
-    else if (!cycle?.ready || !$('cn-months').value) reason = 'Selecione um ciclo completo e uma referência dentro dos meses disponíveis.';
-    else {
-      const first = $('cn-as-of').value.slice(0, 7);
-      const [year, month] = first.split('-').map(Number);
-      const previous = new Date(Date.UTC(year, month - 2, 1)).toISOString().slice(0, 10);
-      if (station.series.rain.end < previous) reason = `Atualize a chuva salva até ${previous.slice(0, 7)}. Não serão preenchidos meses ausentes.`;
-      else if (station.series.rain.missing) reason = 'A chuva salva contém valores ausentes.';
-    }
-    $('cn-ready').textContent = reason || 'Pronto para executar os dois cenários mensais. A continuidade completa será conferida no servidor.';
-    $('cn-run').disabled = Boolean(reason);
-
-  }
-  function horizon() {
-    const cycle = forecastCycles.find(c => c.id === $('cn-cycle')?.value);
-    const reference = $('cn-as-of').value.slice(0, 7) + '-01';
-    const months = cycle?.months || [], start = months.indexOf(reference);
-    const previous = $('cn-months').value;
-    $('cn-months').replaceChildren();
-    if (start >= 0 && cycle.ready) {
-      months.slice(start).forEach((month, index) => $('cn-months').append(option(index + 1, `${index + 1} · até ${month.slice(0, 7)}`)));
-      $('cn-months').value = previous && Number(previous) <= months.length - start ? previous : String(months.length - start);
-    }
-    $('cn-cycle-info').textContent = cycle ? `Meses de chuva: ${months.map(m => m.slice(0, 7)).join(', ')}. ${cycle.ready ? '18 arquivos necessários presentes; nove modelos.' : [...cycle.errors, ...cycle.missing.map(n => 'Ausente: ' + n)].join(' · ')}` : 'Nenhum ciclo disponível. Prepare os arquivos CDS no notebook 03.';
-    readiness();
-  }
-  async function loadCycles() {
-    if (step !== 'previsao') return;
-    forecastCycles = await api('/cycles');
-    $('cn-cycle').replaceChildren(...forecastCycles.map(c => option(c.id, `${c.id.slice(4)}/${c.id.slice(0, 4)}${c.ready ? '' : ' · incompleto'}`)));
-    if (forecastCycles.some(c => c.id === '202610')) $('cn-cycle').value = '202610';
-    horizon();
-  }
   function rememberStation(code) {
     sessionStorage.setItem('cn3s-station', code);
     const page = new URL(location.href);
@@ -766,89 +693,322 @@
       const url = new URL(link.href); url.searchParams.set('station', code); link.href = url;
     });
   }
-  async function loadStation() {
-    error();
-    const version = ++selection, code = $('cn-station').value;
-    station = null; clearResults();
-    if ($('cn-input-download')) $('cn-input-download').hidden = true;
-    for (const id of ['cn-inputs', 'cn-parameter-values']) $(id)?.replaceChildren();
-    $('cn-calibration-select')?.replaceChildren(option('', 'Selecione uma calibração'));
-    if ($('cn-calibration-info')) $('cn-calibration-info').textContent = '';
-    rememberStation(code);
-    readiness();
-    if (!code) { $('cn-station-info').textContent = 'Selecione uma estação.'; return; }
-    const data = await api(`/stations/${code}`);
-    if (version !== selection) return;
-    station = data;
-    const selectedOption = [...$('cn-station').options].find(o => o.value === code);
-    if (selectedOption) selectedOption.textContent = `${data.metadata.station_name} · ${code}`;
-    const m = data.metadata;
-    $('cn-station-info').textContent = `${m.station_name} · ${m.station_code} · Cobacia ${m.cobacia} · Área do inventário: ${number(m.drainage_area)} km² · Área hidrográfica: ${number(m.drainage_area_geo)} km²`;
-    if (data.overview) $('cn-station-info').append(` · Latitude: ${number(data.overview.latitude)} · Longitude: ${number(data.overview.longitude)} (graus decimais)`);
-    if ($('cn-inputs')) for (const [name, series] of Object.entries(data.series)) {
-      addTable($('cn-inputs'), `${name === 'rain' ? 'Chuva (mm/mês)' : 'Vazão (m³/s)'} · ${series.start} a ${series.end} · ${series.rows} meses · ${series.missing} ausentes`, series.preview);
+  async function forecastPage() {
+    const stationSelect = $('cn-station'), calibrationSelect = $('cn-calibration-select');
+    const cycleSelect = $('cn-cycle'), monthSelect = $('cn-months');
+    const center = $('cn-flow-centered'), anchor = $('cn-flow-anchor');
+    const flowChart = $('cn-flow-chart'), calibrationChart = $('cn-calibration-chart');
+    const options = {responsive: true, locale: 'pt-BR', displaylogo: false};
+    const dateLabel = new Intl.DateTimeFormat('pt-BR', {dateStyle: 'short', timeZone: 'UTC'});
+    const monthLabel = new Intl.DateTimeFormat('pt-BR', {month: 'long', year: 'numeric', timeZone: 'UTC'});
+    const date = value => new Date(value.slice(0, 10) + 'T00:00:00Z');
+    const cycleLabel = id => monthLabel.format(date(id.slice(0, 4) + '-' + id.slice(4) + '-01'));
+    const nextMonth = (value, increment) => {
+      const [year, month] = value.split('-').map(Number);
+      return new Date(Date.UTC(year, month - 1 + increment, 1)).toISOString().slice(0, 10);
+    };
+    const wait = () => new Promise(resolve => setTimeout(resolve, 1200));
+    let station, cycles = [], busy = false;
+    let chartVersion = 0, flowVersion = 0, flow;
+    const compatible = () => (station?.calibrations || []).filter(run => run.compatible);
+    const cycle = () => cycles.find(item => item.id === cycleSelect.value);
+
+    function readiness() {
+      const lead = cycle()?.months[0];
+      calibrationSelect.disabled = busy || !compatible().length;
+      cycleSelect.disabled = busy || !cycles.some(item => item.ready);
+      monthSelect.disabled = busy || !monthSelect.options.length;
+      let reason = '';
+      if (!station) reason = 'Selecione uma estação.';
+      else if (!compatible().length) reason = 'Salve uma calibração mensal em Calibrar Estação.';
+      else if (!station.basin || !station.series.rain?.end) reason = 'Prepare a bacia e a chuva mensal da estação.';
+      else if (!calibrationSelect.value) reason = 'Selecione uma calibração mensal.';
+      else if (!cycle()?.ready || !monthSelect.value) reason = 'Selecione um ciclo CDS completo e o horizonte.';
+      else if (station.series.rain.end < nextMonth(lead, -1)) {
+        reason = 'Atualize a chuva mensal até ' + monthLabel.format(date(nextMonth(lead, -1))) + '.';
+      } else if (station.series.rain.missing) reason = 'A chuva mensal contém valores ausentes.';
+      $('cn-ready').textContent = reason;
+      $('cn-run').disabled = busy || Boolean(reason);
     }
-    if ($('cn-input-download') && data.series.rain && data.series.discharge) {
-      $('cn-input-download').href = `${root}/stations/${code}/inputs.csv`; $('cn-input-download').hidden = false;
-      $('cn-cal-end').value = data.series.rain.end.slice(0, 7);
+
+    function setBusy(value) {
+      busy = value;
+      stationSelect.disabled = value;
+      document.querySelectorAll('.cn-section-nav a').forEach(link => {
+        if (value) link.setAttribute('aria-disabled', 'true');
+        else link.removeAttribute('aria-disabled');
+      });
+      $('cn-progress').hidden = !value;
+      readiness();
     }
-    if (!$('cn-calibration-select')) { readiness(); return; }
-    data.calibrations.forEach(c => $('cn-calibration-select').append(option(c.id, calibrationLabel(c), !c.compatible)));
-    const first = data.calibrations.find(c => c.id.endsWith('PlainNSE_alfa_livre.json') && c.compatible) || data.calibrations.find(c => c.compatible);
-    if (first) $('cn-calibration-select').value = first.id;
-    calibrationInfo();
-  }
-  async function showResult(id, job) {
-    const result = job.result; clearResults(); $('cn-results').hidden = false;
-    $('cn-result-label').textContent = `Estação ${job.code} · ${job.kind} · ${number(job.elapsed_seconds)} segundos`;
-    $('cn-warnings').textContent = (result.warnings || []).join(' '); $('cn-warnings').hidden = !result.warnings?.length;
-    $('cn-record').textContent = JSON.stringify(result.summary, null, 2);
-    $('cn-downloads').replaceChildren();
-    for (const name of result.downloads) {
-      const link = document.createElement('a'); link.href = `${root}/operations/${id}/download/${name}`; link.textContent = name; link.className = 'button quiet'; $('cn-downloads').append(link);
+
+    function clearResults() {
+      ++flowVersion;
+      flow = undefined;
+      if (flowChart.data) Plotly.purge(flowChart);
+      document.querySelectorAll('#cn-charts .cn-chart').forEach(node => Plotly.purge(node));
+      $('cn-charts').replaceChildren();
+      $('cn-results').hidden = true;
     }
-    for (const name of result.charts) {
-      const figure = await api(`/operations/${id}/download/${name}?inline=1`);
-      const chart = document.createElement('div'); chart.className = 'cn-chart'; $('cn-charts').append(chart);
-      await Plotly.newPlot(chart, figure.data, figure.layout, {responsive: true, locale: 'pt-BR', displaylogo: false});
-    }
-    if (result.downloads.includes('raw-rainfall.png')) {
-      const image = document.createElement('img'); image.src = `${root}/operations/${id}/download/raw-rainfall.png?inline=1`; image.alt = 'Chuva bruta em equivalente de 30 dias, observações e climatologia'; image.className = 'cn-result-image'; $('cn-charts').append(image);
-    }
-    $('cn-result-tables').replaceChildren();
-    if (result.rain) addTable($('cn-result-tables'), 'Chuva dos cenários · mm/mês', result.rain);
-    if (result.discharge) addTable($('cn-result-tables'), 'Vazão dos cenários · m³/s · datas com ACT', result.discharge);
-  }
-  async function poll(id) {
-    try {
-      const job = await api(`/operations/${id}`);
-      if (job.status === 'running') {
-        $('cn-progress').textContent = `${job.phase} · ${Math.round(Date.now() / 1000 - job.started)} s`;
-        setTimeout(() => poll(id), 1500); return;
+
+    async function showCalibration() {
+      const version = ++chartVersion;
+      const run = compatible().find(item => item.id === calibrationSelect.value);
+      const status = $('cn-calibration-chart-status');
+      if (calibrationChart.data) Plotly.purge(calibrationChart);
+      $('cn-calibration-review').hidden = !run;
+      readiness();
+      if (!run) return;
+      const p = run.params, m = run.metadata;
+      document.querySelectorAll('#cn-parameter-values td').forEach(cell => {
+        const value = p[cell.dataset.parameter];
+        cell.textContent = value == null ? 'indisponível' : Number(value).toLocaleString('pt-BR', {maximumSignificantDigits: 8});
+      });
+      const period = m.input_start && m.input_end ? m.input_start + ' a ' + m.input_end : '';
+      $('cn-calibration-info').textContent = [period, 'Área calibrada ' + number(p.area) + ' km²',
+        'Aquecimento ' + number(p.warmup_steps) + ' meses'].filter(Boolean).join(' · ');
+      status.textContent = 'Carregando gráfico…';
+      try {
+        const figure = await api('/stations/' + stationSelect.value + '/calibrations/chart?calibration=' + encodeURIComponent(run.id));
+        if (version !== chartVersion) return;
+        // Ignore a saved zoom range so the initial view always shows the full period.
+        for (const [axis, layout] of Object.entries(figure.layout)) {
+          if (/^xaxis\d*$/.test(axis)) {
+            delete layout.range;
+            layout.autorange = true;
+          }
+        }
+        await Plotly.react(calibrationChart, figure.data, figure.layout, options);
+        if (version !== chartVersion) return;
+        status.textContent = run.has_chart ? '' : 'Gráfico reconstituído com os dados mensais disponíveis.';
+      } catch (exc) {
+        if (version === chartVersion) status.textContent = 'Gráfico indisponível. ' + exc.message;
       }
-      if (job.status === 'failed') throw new Error(job.error);
-      if (step === 'previsao' && !forecastCycles.length) {
-        await loadCycles(); await loadStation();
-        if (job.kind === 'forecast') {
-          $('cn-cycle').value = job.settings.cycle; $('cn-calibration-select').value = job.settings.calibration;
-          $('cn-as-of').value = job.settings.as_of; horizon(); $('cn-months').value = job.settings.months; calibrationInfo();
+    }
+
+    async function loadStation(preferredCalibration) {
+      const version = ++selection, code = stationSelect.value;
+      station = undefined;
+      clearResults();
+      rememberStation(code);
+      error();
+      calibrationSelect.replaceChildren(option('', code ? 'Carregando calibrações…' : 'Selecione uma estação'));
+      $('cn-station-info').textContent = '';
+      await showCalibration();
+      if (!code || version !== selection) return;
+      try {
+        const data = await api('/stations/' + code);
+        if (version !== selection) return;
+        station = data;
+        const runs = compatible().sort((a, b) => (b.metadata.saved_at || '').localeCompare(a.metadata.saved_at || ''));
+        calibrationSelect.replaceChildren(...runs.map(run => option(run.id, calibrationLabel(run))));
+        if (!runs.length) calibrationSelect.add(option('', 'Nenhuma calibração mensal disponível'));
+        if (runs.some(run => run.id === preferredCalibration)) calibrationSelect.value = preferredCalibration;
+        const name = data.overview?.name || data.metadata.station_name;
+        if (name) stationSelect.selectedOptions[0].textContent = name + ' · ' + code;
+        await showCalibration();
+      } catch (exc) {
+        if (version !== selection) return;
+        calibrationSelect.replaceChildren(option('', 'Calibrações indisponíveis'));
+        $('cn-station-info').textContent = exc.message;
+      }
+    }
+
+    function setHorizon(preferredMonths) {
+      const item = cycle(), start = item?.months[0];
+      const previous = Number(preferredMonths ?? monthSelect.value);
+      const lengths = [];
+      if (item?.ready) {
+        for (const lead of item.months) {
+          if (lead !== nextMonth(start, lengths.length)) break;
+          lengths.push(lead);
         }
       }
-      if (job.kind !== 'forecast' || !station) {
-        if (![...$('cn-station').options].some(o => o.value === String(job.code))) $('cn-station').append(option(job.code, String(job.code)));
-        $('cn-station').value = job.code; await loadStation();
-        if (job.result.calibration && $('cn-calibration-select')) { $('cn-calibration-select').value = job.result.calibration; calibrationInfo(); }
+      monthSelect.replaceChildren(...lengths.map((_, i) => option(i + 1, i === 0 ? '1 mês' : (i + 1) + ' meses')));
+      if (lengths.length) monthSelect.value = String(Math.min(previous || lengths.length, lengths.length));
+      showHorizon();
+    }
+
+    function showHorizon() {
+      const start = cycle()?.months[0];
+      const count = Number(monthSelect.value);
+      $('cn-cycle-info').textContent = start && count
+        ? 'Chuva prevista de ' + monthLabel.formatRange(date(start), date(nextMonth(start, count - 1))) + '.'
+        : (cycles.some(item => item.ready) ? '' : 'Nenhum ciclo completo. Prepare os arquivos CDS no notebook 03.');
+      readiness();
+    }
+
+    async function loadCycles(preferredCycle, preferredMonths) {
+      cycles = await api('/cycles');
+      cycleSelect.replaceChildren(...cycles.map(item =>
+        option(item.id, cycleLabel(item.id) + (item.ready ? '' : ' · incompleto'), !item.ready)));
+      const ready = cycles.find(item => item.id === preferredCycle && item.ready) || cycles.find(item => item.ready);
+      if (ready) cycleSelect.value = ready.id;
+      else cycleSelect.replaceChildren(option('', 'Nenhum ciclo completo'), ...cycleSelect.options);
+      setHorizon(preferredMonths);
+    }
+
+    async function drawFlow() {
+      const version = ++flowVersion;
+      if (!flow) return;
+      const name = 'monthly' + (center.checked ? '' : '-calendar') + (anchor.checked ? '-anchored' : '') + '.json';
+      const {figures, id} = flow;
+      const status = $('cn-flow-notice');
+      try {
+        if (!figures.has(name)) figures.set(name, api('/operations/' + id + '/download/' + name + '?inline=1'));
+        const figure = await figures.get(name);
+        if (version !== flowVersion) return;
+        const hidden = new Set([...$('cn-flow-years').querySelectorAll('input:not(:checked)')].map(input => input.value));
+        const traces = figure.data.map(trace => hidden.has(trace.legendgroup) ? {...trace, visible: false} : trace);
+        const layout = {...figure.layout, title: undefined, height: window.innerWidth <= 600 ? 490 : 600,
+          margin: {...figure.layout.margin, l: 65, r: 16, t: 48, b: 140},
+          xaxis: {...figure.layout.xaxis, automargin: true},
+          legend: {...figure.layout.legend, itemclick: false, itemdoubleclick: false}};
+        await Plotly.react(flowChart, traces, layout, options);
+        if (version === flowVersion) {
+          status.textContent = flow.cutoff;
+          $('cn-flow-anchor-note').textContent = flow.anchorMessage
+            || (anchor.checked ? 'As duas curvas foram ajustadas à vazão média observada no mês de referência, até a data de corte.' : '');
+        }
+      } catch (exc) {
+        figures.delete(name);
+        if (version === flowVersion) status.textContent = 'Gráfico mensal indisponível. ' + exc.message;
       }
-      if (['calibrate', 'forecast'].includes(job.kind) && ((step === 'calibrar' && job.kind === 'calibrate') || (step === 'previsao' && job.kind === 'forecast'))) await showResult(id, job);
-      setBusy(false);
-    } catch (exc) { setBusy(false); error(exc.message); }
-  }
-  async function operate(kind, payload) {
-    error(); clearResults(); setBusy(true); $('cn-progress').textContent = 'Iniciando…';
+    }
+
+    function addAnomalyControl(id, chart, percent) {
+      const controls = document.createElement('div'); controls.className = 'forecast-plot-controls';
+      const label = document.createElement('label'), input = document.createElement('input');
+      input.type = 'checkbox'; input.id = 'cn-anomaly-mm';
+      const status = document.createElement('p'); status.className = 'muted';
+      status.setAttribute('role', 'status');
+      input.setAttribute('aria-describedby', 'cn-anomaly-status');
+      status.id = 'cn-anomaly-status';
+      label.append(input, 'Exibir anomalia em mm'); controls.append(label, status);
+      chart.before(controls);
+      let mmFigure, version = 0;
+      input.addEventListener('change', async () => {
+        const requested = ++version;
+        status.textContent = '';
+        try {
+          if (input.checked && !mmFigure) mmFigure = api('/operations/' + id + '/download/anomaly-mm.json?inline=1');
+          const figure = input.checked ? await mmFigure : percent;
+          if (requested !== version || !chart.isConnected) return;
+          await Plotly.react(chart, figure.data, figure.layout, options);
+        } catch (exc) {
+          mmFigure = undefined;
+          if (requested !== version || !chart.isConnected) return;
+          input.checked = false;
+          status.textContent = 'Não foi possível exibir a anomalia em mm. ' + exc.message;
+        }
+      });
+    }
+
+    async function showResult(id, job) {
+      clearResults();
+      const {result} = job;
+      const downloads = result.downloads || [];
+      $('cn-results').hidden = false;
+      const calibration = compatible().find(run => run.id === job.settings.calibration);
+      $('cn-result-label').textContent = [stationSelect.selectedOptions[0]?.textContent || job.code,
+        calibration ? calibrationName(calibration) : '', 'CDS ' + cycleLabel(job.settings.cycle)].filter(Boolean).join(' · ');
+      $('cn-warnings').textContent = (result.warnings || []).join(' ');
+      $('cn-warnings').hidden = !result.warnings?.length;
+      $('cn-record').textContent = JSON.stringify(result.summary, null, 2);
+      $('cn-downloads').replaceChildren();
+      $('cn-result-tables').replaceChildren();
+      $('cn-flow-years').replaceChildren();
+      $('cn-flow-anchor-note').textContent = '';
+      const asOf = result.summary?.forecast?.as_of || job.settings.as_of;
+      const forecastStart = result.summary?.forecast_discharge_start;
+      $('cn-flow-scenario-start').textContent = forecastStart && forecastStart.slice(0, 7) > asOf.slice(0, 7)
+        ? ' As curvas usam chuva observada nos meses iniciais. A chuva prevista passa a influenciar a vazão em ' + monthLabel.format(date(forecastStart)) + '.'
+        : '';
+      const hasMonthly = downloads.includes('monthly.json');
+      $('cn-flow-controls').hidden = $('cn-flow-caption').hidden = !hasMonthly;
+      $('cn-flow-notice').textContent = hasMonthly ? 'Carregando gráfico…' : 'Comparação de vazão observada indisponível.';
+      if (hasMonthly) {
+        const year = Number(asOf.slice(0, 4));
+        for (const yearsAgo of [1, 2, 3]) {
+          if (yearsAgo === 3 && !downloads.includes('monthly-calendar.json')) continue;
+          const label = document.createElement('label'), input = document.createElement('input');
+          input.type = 'checkbox'; input.value = String(year - yearsAgo); input.checked = yearsAgo < 3;
+          input.addEventListener('change', drawFlow);
+          label.append(input, input.value); $('cn-flow-years').append(label);
+        }
+        center.checked = true; center.disabled = !downloads.includes('monthly-calendar.json');
+        anchor.checked = false; anchor.disabled = !downloads.includes('monthly-anchored.json');
+        flow = {id, figures: new Map(), cutoff: 'Observações consultadas até ' + dateLabel.format(date(asOf)) + '.',
+          anchorMessage: anchor.disabled ? result.anchor_message || 'Esta operação não possui uma figura ancorada.' : ''};
+        await drawFlow();
+      }
+
+      for (const name of result.charts.filter(name => name !== 'monthly.json')) {
+        const figure = await api('/operations/' + id + '/download/' + name + '?inline=1');
+        const chart = document.createElement('div'); chart.className = 'cn-chart'; $('cn-charts').append(chart);
+        await Plotly.newPlot(chart, figure.data, figure.layout, options);
+        if (name === 'anomaly.json' && downloads.includes('anomaly-mm.json')) addAnomalyControl(id, chart, figure);
+      }
+      for (const name of downloads.filter(name => name !== 'raw-rainfall.png')) {
+        const link = document.createElement('a');
+        link.href = root + '/operations/' + id + '/download/' + name;
+        link.textContent = name; link.className = 'button quiet'; $('cn-downloads').append(link);
+      }
+      if (result.rain) addTable($('cn-result-tables'), 'Chuva dos cenários · mm/mês', result.rain);
+      if (result.discharge) addTable($('cn-result-tables'), 'Vazão dos cenários · m³/s · datas com ACT', result.discharge);
+    }
+
+    async function poll(id, job) {
+      let latest = job || await api('/operations/' + id);
+      while (latest.status === 'running') {
+        $('cn-progress').textContent = latest.phase + ' · ' + Math.round(Date.now() / 1000 - latest.started) + ' s';
+        await wait();
+        latest = await api('/operations/' + id);
+      }
+      return latest;
+    }
+
+    stationSelect.addEventListener('change', () => loadStation());
+    calibrationSelect.addEventListener('change', () => { clearResults(); showCalibration(); });
+    cycleSelect.addEventListener('change', () => { clearResults(); setHorizon(); });
+    monthSelect.addEventListener('change', () => { clearResults(); showHorizon(); });
+    center.addEventListener('change', drawFlow);
+    anchor.addEventListener('change', drawFlow);
+    document.querySelectorAll('.cn-section-nav a').forEach(link => {
+      link.addEventListener('click', event => { if (busy) event.preventDefault(); });
+    });
+    $('cn-run').addEventListener('click', async () => {
+      error(); clearResults(); setBusy(true); $('cn-progress').textContent = 'Iniciando…';
+      try {
+        const started = await api('/stations/' + stationSelect.value + '/forecast', {
+          calibration: calibrationSelect.value, cycle: cycleSelect.value, months: Number(monthSelect.value),
+        });
+        const job = await poll(started.operation_id);
+        if (job.status === 'failed') throw new Error(job.error);
+        await showResult(started.operation_id, job);
+        $('cn-results').scrollIntoView({block: 'start'});
+      } catch (exc) { error(exc.message); }
+      finally { setBusy(false); }
+    });
+
+    const id = workspace.dataset.operation;
+    setBusy(true);
+    $('cn-progress').textContent = 'Carregando configuração…';
     try {
-      const code = $('cn-station').value;
-      const job = await api(`/stations/${code}/${kind}`, payload); await poll(job.operation_id);
-    } catch (exc) { setBusy(false); error(exc.message); }
+      let job = id ? await api('/operations/' + id).catch(() => null) : null;
+      if (job?.status === 'running') {
+        if (job.kind === 'forecast' && [...stationSelect.options].some(option => option.value === String(job.code))) {
+          stationSelect.value = String(job.code);
+        }
+        job = await poll(id, job);
+      }
+      const sameStation = job?.kind === 'forecast' && String(job.code) === stationSelect.value;
+      // Both catalog routes use the same server lock.
+      await loadCycles(sameStation ? job.settings.cycle : undefined, sameStation ? job.settings.months : undefined);
+      await loadStation(sameStation ? job.settings.calibration : undefined);
+      if (sameStation && job.status === 'completed') await showResult(id, job);
+      if (sameStation && job.status === 'failed') error(job.error);
+    } finally { setBusy(false); }
   }
   const preferred = new URLSearchParams(location.search).get('station');
   const saved = sessionStorage.getItem('cn3s-station');
@@ -863,37 +1023,5 @@
     calibrationPage().catch(exc => error(exc.message));
     return;
   }
-  $('cn-station').addEventListener('change', () => loadStation().catch(exc => error(exc.message)));
-  $('cn-calibration-select')?.addEventListener('change', () => {clearResults(); calibrationInfo();});
-  for (const id of ['cn-cycle', 'cn-as-of']) $(id)?.addEventListener('change', () => {clearResults(); horizon();});
-  $('cn-months')?.addEventListener('change', clearResults);
-  $('cn-replace')?.addEventListener('change', readiness);
-  for (const series of ['rain', 'discharge']) $(`cn-save-${series}`)?.addEventListener('click', () => operate('inputs', {series, start: $('cn-start').value + '-01', end: $('cn-end').value + '-01', replace: $('cn-replace').checked}));
-  $('cn-run')?.addEventListener('click', () => operate('forecast', {calibration: $('cn-calibration-select').value, cycle: $('cn-cycle').value, as_of: $('cn-as-of').value, months: Number($('cn-months').value)}));
-  document.querySelectorAll('.cn-section-nav a').forEach(link => link.addEventListener('click', event => { if (busy) event.preventDefault(); }));
-  async function initialize() {
-    const job = workspace.dataset.operation ? await api(`/operations/${workspace.dataset.operation}`).catch(() => null) : null;
-    if (job?.status === 'running' && job.kind === 'overview') {
-      // Finish the background read before requesting lock-protected forecast files.
-      let active = job;
-      while (active.status === 'running') {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        active = await api('/operations/' + workspace.dataset.operation);
-      }
-    } else if (job?.status === 'running') {
-      $('cn-station').value = String(job.code);
-      setBusy(true); await poll(workspace.dataset.operation); return;
-    }
-    await loadCycles(); await loadStation();
-    const relevant = job && ((step === 'calibrar' && job.kind === 'calibrate') || (step === 'previsao' && job.kind === 'forecast'));
-    if (relevant && String(job.code) === $('cn-station').value && job.status === 'completed') {
-      if (job.kind === 'forecast') {
-        $('cn-calibration-select').value = job.settings.calibration;
-        $('cn-cycle').value = job.settings.cycle; $('cn-as-of').value = job.settings.as_of;
-        horizon(); $('cn-months').value = job.settings.months; calibrationInfo();
-      }
-      await showResult(workspace.dataset.operation, job);
-    }
-  }
-  initialize().catch(exc => error(exc.message));
+  forecastPage().catch(exc => error(exc.message));
 })();

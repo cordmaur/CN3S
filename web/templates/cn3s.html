@@ -9,25 +9,45 @@
 <div class="cn3s-heading"><div><p class="muted">MODELAGEM MENSAL · PROVA DE CONCEITO</p>
 <h1>Da chuva à vazão</h1><p>Estação, calibração e previsão em três etapas.</p></div>
 </div>
+{% if step != 'previsao' %}
 <p id="cn-error" class="cn-notice" role="alert" hidden></p>
 <p id="cn-progress" class="cn-notice" role="status" aria-live="polite" hidden></p>
+{% endif %}
 <nav class="cn-section-nav" aria-label="Etapas CN3S">{% for key, label in [('estacao', 'Estação'), ('calibrar', 'Calibrar Estação'), ('previsao', 'Previsão')] %}<a href="{{ url_for('cn3s.index', step=key) }}" {% if step == key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav>
+{% macro station_select() -%}
+<select id="cn-station"><option value="">Selecione uma estação</option>{% for station in stations %}<option value="{{ station.code }}">{{ station.name }} · {{ station.code }}</option>{% endfor %}</select>
+{%- endmacro %}
 <div id="cn-controls">
+{% if step != 'previsao' %}
 <section class="card"><h2>{{ title }}</h2>
 <label for="cn-station">Selecionar estação</label>
 <div class="cn-selector">
-<select id="cn-station"><option value="">Selecione uma estação</option>{% for station in stations %}<option value="{{ station.code }}">{{ station.name }} · {{ station.code }}</option>{% endfor %}</select>
+{{ station_select() }}
 {% if step == 'estacao' %}<button type="button" id="cn-add">Adicionar estação</button>{% endif %}
 </div>
 <div id="cn-station-info" class="cn-summary">Selecione uma estação para visualizar os dados.</div>
 </section>
+{% endif %}
 {% include 'cn3s_' ~ step ~ '.html' %}
 </div>
 <section class="card" id="cn-results" hidden>
 <h2>Resultados</h2><p id="cn-result-label"></p><p id="cn-warnings" class="cn-notice" hidden></p>
-{% if step == 'previsao' %}<p>As faixas P10–P90 mostram variabilidade histórica, não incerteza da previsão. O ACT já está aplicado às datas numéricas. Não foi aplicado ajuste à vazão observada.</p>{% endif %}
-<div id="cn-downloads" class="cn-actions"></div>
+{% if step == 'previsao' %}
+<section aria-labelledby="cn-flow-title">
+  <h3 id="cn-flow-title">Vazão média mensal observada e prevista</h3>
+  <p id="cn-flow-notice" class="muted" role="status"></p>
+  <div id="cn-flow-controls" class="forecast-plot-controls" hidden>
+    <fieldset><legend>Anos anteriores</legend><div id="cn-flow-years"></div></fieldset>
+    <label><input type="checkbox" id="cn-flow-centered" checked> Centralizar no mês de referência</label>
+    <label><input type="checkbox" id="cn-flow-anchor" aria-describedby="cn-flow-anchor-note"> Ancorar ao observado</label>
+  </div>
+  <p id="cn-flow-anchor-note" class="muted" role="status"></p>
+  <div id="cn-flow-chart" aria-label="Gráfico mensal de vazão"></div>
+  <p id="cn-flow-caption" class="muted" hidden>A faixa P10–P90 mostra a variabilidade histórica. A simulação já aplica o ACT às datas de vazão.<span id="cn-flow-scenario-start"></span></p>
+</section>
+{% endif %}
 <div id="cn-charts"></div>
+<div id="cn-downloads" class="cn-actions"></div>
 <div id="cn-result-tables"></div>
 <details><summary>Configuração e procedência</summary><pre id="cn-record"></pre></details>
 <p class="muted">Resultados disponíveis por até uma hora após a conclusão. Baixe os arquivos para manter um registro. Reiniciar o servidor interrompe trabalhos em andamento.</p>

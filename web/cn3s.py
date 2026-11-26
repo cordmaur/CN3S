@@ -20,7 +20,6 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import geopandas as gpd
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.io as pio
@@ -220,7 +219,9 @@ def station_summary(code: int) -> dict[str, Any]:
     metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
     path = folder / "overview.json"
     overview = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-    metadata.setdefault("station_name", (overview or {}).get("name") or f"Estação {code}")
+    metadata["station_name"] = (
+        metadata.get("station_name") or (overview or {}).get("name") or f"Estação {code}"
+    )
     if metadata.get("drainage_area") is None:
         # Legacy metadata can omit the area even when the saved inventory has it.
         area = metadata.get("area_station_km2")
@@ -308,7 +309,7 @@ def cycles() -> list[dict[str, Any]]:
                 "months": calendars[0] if calendars else [],
                 "missing": missing,
                 "errors": errors,
-                "ready": bool(calendars) and not missing and not errors,
+                "ready": bool(calendars and calendars[0]) and not missing and not errors,
             }
         )
     return rows
@@ -409,8 +410,8 @@ def provenance(paths: list[Path]) -> dict[str, Any]:
 
 
 def observation_artifacts(
-    inference: Inference, token: str, as_of: pd.Timestamp
-) -> dict[str, bytes]:
+    inference: Inference, token: str, as_of: pd.Timestamp, job_id: str
+) -> tuple[dict[str, bytes], str]:
     """
     Load user-authenticated discharge and render historical comparisons through as_of.
 
@@ -418,51 +419,90 @@ def observation_artifacts(
         inference: Prepared monthly inference instance.
         token: Delegated Azure SQL token of the initiating user; never persisted in results.
         as_of: Last allowed observation date; not a historical data snapshot.
+        job_id: Operation receiving progress updates.
 
     Returns:
-        Comparison charts and numerical observations/statistics in m³/s.
+        Comparison artifacts in m³/s and an explanation when anchoring is unavailable.
 
     """
     conn = UserSqlConnector(token, cache=current_app.extensions["shc_sql_cache"])
     try:
         live = Station.from_folder(inference.station.station_dir, connector=conn)
-        live.load_series()
+        live.load_series(series_type="vazao", end=as_of.strftime("%Y-%m-%d"))
         daily = live.get_series("hidro/telemetria", "vazao")["val"].loc[:as_of]
     finally:
         conn.close()
     if daily.dropna().empty:
         msg = "Não há observações de vazão para a comparação."
         raise ValueError(msg)
+    progress(job_id, "Preparando gráficos e estatísticas de vazão…")
     inference.discharge_daily = daily
+    # Include the simulation driven by antecedent rainfall as the common starting point.
     artifacts = {
-        "monthly.json": plot_artifact(inference.plot_monthly_discharge()),
+        "monthly.json": plot_artifact(inference.plot_monthly_discharge(previous_years=3)),
+        "monthly-calendar.json": plot_artifact(
+            inference.plot_monthly_discharge(centered=False, previous_years=3)
+        ),
         "daily.json": plot_artifact(inference.plot_discharge()),
         "observed-discharge.csv": daily.to_csv().encode(),
         "monthly-observations.csv": inference.discharge_monthly.to_csv().encode(),
         "monthly-statistics.csv": inference.discharge_monthly_stats.to_csv().encode(),
     }
-    return artifacts
+    month = as_of.to_period("M").to_timestamp()
+    observed = inference.discharge_monthly["mean"].reindex([month]).iloc[0]
+    if pd.isna(observed):
+        return artifacts, "Não há vazão observada no mês de referência para ancorar as curvas."
+    if inference.discharge_scenarios.reindex([month]).isna().any(axis=None):
+        return artifacts, "Falta vazão simulada no mês de referência para ancorar as curvas."
+    try:
+        anchored = {
+            "monthly-anchored.json": plot_artifact(
+                inference.plot_monthly_discharge(anchor_to_observed=True, previous_years=3)
+            ),
+            "monthly-calendar-anchored.json": plot_artifact(
+                inference.plot_monthly_discharge(
+                    centered=False, anchor_to_observed=True, previous_years=3
+                )
+            ),
+        }
+    except Exception:
+        current_app.logger.exception("CN3S anchoring failed")
+        return artifacts, "Não foi possível ancorar o gráfico de vazão."
+    artifacts.update(anchored)
+    return artifacts, ""
 
 
-def raw_rainfall_image(inference: Inference) -> bytes:
+def forecast_reference(payload: dict[str, Any], leads: list[str]) -> tuple[pd.Timestamp, int]:
     """
-    Render and close the notebook's raw rainfall figure under the shared plotting lock.
+    Resolve a monthly forecast horizon and the observation cutoff.
 
     Args:
-        inference: Prepared monthly inference instance.
+        payload: Lead count and an optional explicit reference date for existing callers.
+        leads: Calendar month starts available in the selected CDS cycle.
 
     Returns:
-        PNG image of raw 30-day-equivalent forecasts and monthly observations.
+        Observation cutoff and validated count of consecutive rainfall months.
 
     """
-    with current_app.extensions["shc_render_lock"]:
-        figure = inference.rainfall.plot_raw_rainfall()
-        try:
-            image = io.BytesIO()
-            figure.savefig(image, format="png", bbox_inches="tight")
-            return image.getvalue()
-        finally:
-            plt.close(figure)
+    # The form selects a cycle, while older callers may still supply a reference day.
+    if payload.get("as_of"):
+        as_of = pd.Timestamp(payload["as_of"])
+    else:
+        lead_start = pd.Timestamp(leads[0])
+        lead_end = lead_start + pd.offsets.MonthEnd()
+        today = pd.Timestamp(datetime.now(ZoneInfo("America/Sao_Paulo")).date())
+        as_of = min(max(today, lead_start), lead_end)
+    first = as_of.to_period("M").to_timestamp()
+    months = int(payload["months"])
+    requested: list[str] = (
+        pd.date_range(first, periods=months, freq="MS").strftime("%Y-%m-%d").tolist()
+        if months > 0
+        else []
+    )
+    if not requested or not all(month in leads for month in requested):
+        msg = "O horizonte solicitado não está disponível neste ciclo."
+        raise ValueError(msg)
+    return as_of, months
 
 
 def forecast(code: int, payload: dict[str, Any], token: str, job_id: str) -> dict[str, Any]:
@@ -486,18 +526,12 @@ def forecast(code: int, payload: dict[str, Any], token: str, job_id: str) -> dic
     if available is None:
         msg = "Ciclo CDS incompleto ou indisponível. Prepare os arquivos no notebook 03."
         raise ValueError(msg)
-    as_of = pd.Timestamp(payload["as_of"])
+    as_of, months = forecast_reference(payload, available["months"])
     first = as_of.to_period("M").to_timestamp()
-    months = int(payload["months"])
-    requested: list[str] = (
-        pd.date_range(first, periods=months, freq="MS").strftime("%Y-%m-%d").tolist()
-        if months > 0
-        else []
-    )
-    if not requested or not all(month in available["months"] for month in requested):
-        msg = "O horizonte solicitado não está disponível neste ciclo."
-        raise ValueError(msg)
     station = Station.from_folder(folder)
+    if not station.metadata.get("station_name"):
+        # Legacy folders store the station name in the inventory snapshot.
+        station.metadata["station_name"] = station_summary(code)["metadata"]["station_name"]
     rain = monthly_rain(station)
     if first - pd.DateOffset(months=1) not in rain.index:
         msg = "Atualize a chuva salva até o mês anterior à referência antes de executar."
@@ -521,17 +555,19 @@ def forecast(code: int, payload: dict[str, Any], token: str, job_id: str) -> dic
         "calibration.json": path.read_bytes(),
         "rainfall.json": plot_artifact(inference.rainfall.plot_forecast_rainfall()),
         "anomaly.json": plot_artifact(inference.rainfall.plot_rainfall_anomaly()),
+        "anomaly-mm.json": plot_artifact(inference.rainfall.plot_rainfall_anomaly(unit="mm")),
     }
-    artifacts["raw-rainfall.png"] = raw_rainfall_image(inference)
     rainfall = inference.rainfall.data
     for key in ("forecast", "observed", "climatology"):
         # Export basin summaries instead of the full regional grids retained for maps.
         names = [name for name in rainfall[key] if name.startswith("basin_")]
         artifacts[f"{key}-rainfall.csv"] = rainfall[key][names].to_dataframe().to_csv().encode()
-    progress(job_id, "Consultando vazão com a conta conectada…")
+    progress(job_id, "Carregando vazão diária com a conta conectada…")
     warnings = []
+    anchor_message = ""
     try:
-        artifacts.update(observation_artifacts(inference, token, as_of))
+        observed_artifacts, anchor_message = observation_artifacts(inference, token, as_of, job_id)
+        artifacts.update(observed_artifacts)
     except Exception:
         # Numerical forecasts remain usable when only the optional online comparison fails.
         current_app.logger.exception("CN3S observation comparison failed")
@@ -556,6 +592,9 @@ def forecast(code: int, payload: dict[str, Any], token: str, job_id: str) -> dic
         calibration=path.relative_to(folder).as_posix(),
         params=asdict(inference.params),
         forecast=rainfall["forecast"].attrs,
+        forecast_discharge_start=(first + pd.DateOffset(months=inference.params.act)).strftime(
+            "%Y-%m-%d"
+        ),
         rainfall_seconds=rainfall_seconds,
         elapsed_seconds=time.monotonic() - started,
         warnings=warnings,
@@ -566,6 +605,7 @@ def forecast(code: int, payload: dict[str, Any], token: str, job_id: str) -> dic
     return {
         "artifacts": artifacts,
         "warnings": warnings,
+        "anchor_message": anchor_message,
         "charts": [
             n
             for n in ("monthly.json", "daily.json", "rainfall.json", "anomaly.json")
