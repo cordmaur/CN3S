@@ -28,7 +28,7 @@
     async function checkLogin() {
       try {
         const state = await api('/shc/login/status');
-        if (state.status === 'signed_in') { window.location.replace('/shc/home'); return; }
+        if (state.status === 'signed_in') { window.location.replace('/shc/login'); return; }
         if (state.status !== initial) { window.location.replace('/shc/login'); return; }
         $('#login-error').textContent = '';
       } catch (error) { $('#login-error').textContent = 'Não foi possível verificar a entrada. Tentando novamente…'; }

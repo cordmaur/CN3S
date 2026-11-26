@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from threading import Thread
@@ -45,18 +45,22 @@ from mergedownloader.inpeparser import InpeParsers
 from shapely.geometry import box
 
 from cn3s import CN3S, CN3SOptimizer, CN3SParams
-from cn3s.objectives import Objectives
+from cn3s.metrics import compute_nse_from_frame
+from cn3s.objectives import ExtremeFlowBlend, NSETopBlend, Objectives
 from hydro.inference import Inference
 from hydro.rainfall import MODEL_NAMES
-from hydro.station import Station
+from hydro.station import Station, watershed_path
 from utils.user_sql_connector import UserSqlConnector
 
 bp = Blueprint("cn3s", __name__, url_prefix="/shc/cn3s")
 TTL = 3600
 PARAMETERS = tuple(CN3SParams().bounds)
 MAX_WARMUP = 24
-MAX_ITERATIONS = 20
+DEFAULT_ITERATIONS = 20
+MAX_ITERATIONS = 1000
 BOUND_SIZE = 2
+CALIBRATION_RESULTS = {"calibrate", "manual-calibration"}
+MAX_CALIBRATION_NAME = 100
 
 
 def data_root() -> Path:
@@ -143,14 +147,40 @@ def calibrations(folder: Path) -> list[dict[str, Any]]:
                 saved = json.loads(path.read_text(encoding="utf-8"))
                 metadata = saved["metadata"]
                 params = saved["params"]
+                if not metadata.get("final_metrics"):
+                    final: dict[str, Any] = next(
+                        (
+                            r
+                            for r in saved.get("history", [])
+                            if r.get("step") == metadata.get("final_step")
+                            and r.get("step") is not None
+                        ),
+                        {},
+                    )
+                    metadata["final_metrics"] = {
+                        k: final.get(k)
+                        for k in ("train_nse", "test_nse", "train_objective", "test_objective")
+                    }
                 compatible = (
                     metadata.get("frequency") == "M"
                     and metadata.get("act_units") == "calendar_months"
                     and math.isfinite(float(params["area"]))
                     and float(params["area"]) > 0
                 )
-                item.update(metadata=metadata, params=params, compatible=compatible)
-            except (OSError, ValueError, KeyError, TypeError) as exc:
+                changed = any(
+                    not (folder / "Monthly" / filename).exists()
+                    or (folder / "Monthly" / filename).stat().st_mtime_ns != recorded
+                    for filename in ("rain.parquet", "discharge.parquet")
+                    if (recorded := metadata.get("input_mtime_ns", {}).get(filename)) is not None
+                )
+                item.update(
+                    metadata=metadata,
+                    params=params,
+                    compatible=compatible,
+                    inputs_changed=changed,
+                    has_chart="chart" in saved,
+                )
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
                 item["error"] = f"Arquivo inválido: {exc}"
             rows.append(item)
     return rows
@@ -175,21 +205,6 @@ def selected_calibration(folder: Path, identifier: str) -> Path:
     raise ValueError(msg)
 
 
-def watershed_path(folder: Path) -> Path:
-    """
-    Locate the saved basin in current or historical station folders.
-
-    Args:
-        folder: Prepared station directory.
-
-    Returns:
-        GeoParquet path, preferring the current file when both exist.
-
-    """
-    path = folder / "upstream_watershed.parquet"
-    return path if path.exists() else folder / "watershed.parquet"
-
-
 def station_summary(code: int) -> dict[str, Any]:
     """
     Read the published station identity and last daily summary without taking the worker lock.
@@ -206,16 +221,22 @@ def station_summary(code: int) -> dict[str, Any]:
     path = folder / "overview.json"
     overview = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
     metadata.setdefault("station_name", (overview or {}).get("name") or f"Estação {code}")
-    metadata.setdefault("drainage_area", metadata.get("area_station_km2"))
+    if metadata.get("drainage_area") is None:
+        # Legacy metadata can omit the area even when the saved inventory has it.
+        area = metadata.get("area_station_km2")
+        if area is None:
+            area = ((overview or {}).get("inventory") or {}).get("AreaDrenagem")
+        metadata["drainage_area"] = area
     metadata.setdefault("drainage_area_geo", metadata.get("area_nuareacont_km2"))
     return {"metadata": metadata, "overview": overview, "basin": watershed_path(folder).exists()}
 
 
-def station_info(code: int) -> dict[str, Any]:
+def station_info(code: int, *, availability: bool = False) -> dict[str, Any]:
     """
     Inspect station metadata and monthly coverage without SQL or rainfall downloads.
 
     Args:
+        availability: Include observed months for checking the requested window.
         code: Historical ANA station code.
 
     Returns:
@@ -233,14 +254,16 @@ def station_info(code: int) -> dict[str, Any]:
                 "end": str(frame.index.max().date()) if not frame.empty else None,
                 "rows": len(frame),
                 "missing": int(frame.isna().sum().sum()),
+                "months": pd.DatetimeIndex(frame.dropna().index).strftime("%Y-%m").tolist()
+                if availability
+                else [],
                 "preview": table(frame),
             }
     return {
         **station_summary(code),
         "states_available": Path(current_app.config["SHC_STATES_PATH"]).exists(),
         "series": rows,
-        "basin": (folder / "upstream_watershed.parquet").exists(),
-        "calibrations": calibrations(folder),
+        "calibrations": [] if availability else calibrations(folder),
     }
 
 
@@ -517,7 +540,7 @@ def forecast(code: int, payload: dict[str, Any], token: str, job_id: str) -> dic
         )
     source_paths = [
         folder / "metadata.json",
-        folder / "upstream_watershed.parquet",
+        station.upstream_watershed_path,
         folder / "Monthly/rain.parquet",
         path,
     ]
@@ -554,6 +577,146 @@ def forecast(code: int, payload: dict[str, Any], token: str, job_id: str) -> dic
     }
 
 
+def calibration_inputs(
+    station: Station, payload: dict[str, Any]
+) -> tuple[pd.DataFrame, CN3SParams]:
+    """
+    Select the monthly simulation origin and configure the search domain.
+
+    Args:
+        station: Station with saved monthly inputs.
+        payload: Requested inclusive months, warmup and parameter bounds.
+
+    Returns:
+        Rainfall-indexed observations and configured CN3S parameters.
+
+    """
+    saved_inputs = station.get_optim_data("M")
+    start = pd.Timestamp(payload.get("start", saved_inputs.index.min()))
+    end = pd.Timestamp(payload["end"])
+    inputs = saved_inputs.loc[start:end]
+    if (
+        inputs.empty
+        or not start.is_month_start
+        or not end.is_month_start
+        or not inputs.index.equals(pd.date_range(start, end, freq="MS"))
+        or not np.isfinite(inputs["prec_mm"]).all()
+    ):
+        msg = "O intervalo escolhido precisa de chuva contínua, sem meses ausentes."
+        raise ValueError(msg)
+    # Keep the rainfall origin: r0 and the storage history are calibrated together.
+    metadata = station_summary(station.code)["metadata"]
+    saved_area = metadata["drainage_area"]
+    area = float(saved_area) if saved_area is not None else math.nan
+    if not math.isfinite(area) or area <= 0:
+        msg = "A área de drenagem do inventário deve ser positiva (km²)."
+        raise ValueError(msg)
+    params = CN3SParams(name=metadata["station_name"], area=area)
+    params.warmup_steps = int(payload.get("warmup_steps", 3))
+    if not 1 <= params.warmup_steps <= MAX_WARMUP:
+        msg = "Use entre 1 e 24 meses de aquecimento."
+        raise ValueError(msg)
+    for name, limits in payload.get("bounds", {}).items():
+        if name not in PARAMETERS or len(limits) != BOUND_SIZE:
+            msg = "Limites de calibração inválidos."
+            raise ValueError(msg)
+        low, high = map(float, limits)
+        if not math.isfinite(low + high) or low < 0 or low >= high:
+            msg = f"Limites inválidos para {name}."
+            raise ValueError(msg)
+        if name == "act" and not (low.is_integer() and high.is_integer()):
+            msg = "ACT exige limites inteiros em meses."
+            raise ValueError(msg)
+        params.bounds[name] = (low, high)
+    return inputs, params
+
+
+def calibration_chart(model: CN3S, rain: pd.Series, cutoff: str | None) -> bytes:
+    """
+    Plot discharge and rainfall on separate panels with a shared monthly axis.
+
+    Args:
+        model: Simulated model, with observations aligned to ACT-adjusted dates.
+        rain: Input precipitation in mm/month on its original calendar.
+        cutoff: First test month, if archived.
+
+    Returns:
+        Serialized Plotly figure.
+
+    """
+    figure = model.plot(height=740, q_headroom=1.1, prec_headroom=1.08)
+    figure.update_traces(x=rain.index, y=rain, name="Chuva MERGE", selector={"type": "bar"})
+    for trace in figure.select_traces(selector={"type": "scatter"}):
+        trace.name = "Vazão observada" if trace.name == "Observed discharge" else "Vazão simulada"
+    figure.update_layout(
+        width=None,
+        autosize=True,
+        title=None,
+        hovermode="x unified",
+        xaxis_title="Mês",
+        yaxis_title="Vazão (m³/s)",
+        yaxis_domain=[0, 0.57],
+        yaxis2_title="Chuva (mm/mês)",
+        yaxis2_domain=[0.62, 1],
+        yaxis2_overlaying=None,
+        yaxis2_side="left",
+        yaxis2_range=[max(1, float(rain.max()) * 1.08), 0],
+        legend={"x": 0, "y": 1.08, "orientation": "h"},
+        margin={"l": 76, "r": 18, "t": 60, "b": 52},
+    )
+    if cutoff and model.results.index.min() <= pd.Timestamp(cutoff) <= model.results.index.max():
+        figure.add_shape(
+            type="line",
+            x0=cutoff,
+            x1=cutoff,
+            xref="x",
+            y0=0,
+            y1=1,
+            yref="paper",
+            line={"dash": "dash", "color": "#647481"},
+        )
+        figure.add_annotation(
+            x=cutoff,
+            xref="x",
+            y=0.596,
+            yref="paper",
+            text="Início do teste",
+            showarrow=False,
+            xanchor="right",
+        )
+    return plot_artifact(figure)
+
+
+def calibration_generation(
+    job_id: str, generation: int, objective: float, params: dict[str, float], iterations: int
+) -> bool:
+    """
+    Publish a generation for the live chart, retaining samples missed between polls.
+
+    Args:
+        job_id: Initiating operation.
+        generation: Completed generation number.
+        objective: Best training objective in this generation.
+        params: Best candidate parameter values.
+        iterations: Effective generation limit.
+
+    Returns:
+        True when the initiating visitor requested a stop.
+
+    """
+    cache = current_app.config["SESSION_CACHELIB"]
+    key = "cn3s:" + job_id
+    job = cache.get(key)
+    if job:
+        job.setdefault("generations", []).append(
+            [generation, objective if math.isfinite(objective) else None]
+        )
+        job["best_params"] = params
+        job["phase"] = f"Geração {generation} de até {iterations}"
+        cache.set(key, job, timeout=TTL)
+    return bool(cache.get("cn3s-stop:" + job_id))
+
+
 def calibrate(code: int, payload: dict[str, Any], job_id: str) -> dict[str, Any]:
     """
     Calibrate saved monthly inputs offline with a bounded, single-worker solver.
@@ -568,51 +731,48 @@ def calibrate(code: int, payload: dict[str, Any], job_id: str) -> dict[str, Any]
 
     """
     station = Station.from_folder(station_folder(code))
-    monthly_rain(station)
-    inputs = station.get_optim_data("M").loc[: pd.Timestamp(payload["end"])]
-    # Keep the rainfall origin: r0 and the storage history are calibrated together.
-    params = CN3SParams(name=station.name, area=float(station.metadata["drainage_area"]))
-    if not math.isfinite(params.area) or params.area <= 0:
-        msg = "A área de drenagem do inventário deve ser positiva (km²)."
+    inputs, params = calibration_inputs(station, payload)
+    until_convergence = payload.get("until_convergence") is True
+    iterations = (
+        MAX_ITERATIONS if until_convergence else int(payload.get("maxiter", DEFAULT_ITERATIONS))
+    )
+    tol = float(payload.get("tol", 1e-4))
+    atol = float(payload.get("atol", 0))
+    ratio = float(payload.get("train_ratio", 0.9))
+    if (
+        min(tol, atol) < 0
+        or not math.isfinite(tol + atol)
+        or ratio not in {i / 100 for i in range(10, 100, 5)}
+    ):
+        msg = "Confira as tolerâncias e a relação treino/teste em incrementos de 5%."
         raise ValueError(msg)
-    params.warmup_steps = int(payload.get("warmup_steps", 3))
-    if not 1 <= params.warmup_steps <= MAX_WARMUP:
-        msg = "Use entre 1 e 24 meses de aquecimento."
-        raise ValueError(msg)
-    for name, limits in payload.get("bounds", {}).items():
-        if name not in PARAMETERS or len(limits) != BOUND_SIZE:
-            msg = "Limites de calibração inválidos."
-            raise ValueError(msg)
-        low, high = map(float, limits)
-        if not math.isfinite(low + high) or low < 0 or low >= high:
-            msg = f"Limites inválidos para {name}."
-            raise ValueError(msg)
-        params.bounds[name] = (low, high)
-    iterations = int(payload.get("maxiter", 5))
-    if not 1 <= iterations <= MAX_ITERATIONS:
-        msg = "A prova de conceito permite de 1 a 20 iterações."
+    if not until_convergence and not 1 <= iterations <= MAX_ITERATIONS:
+        msg = f"Informe de 1 a {MAX_ITERATIONS} gerações."
         raise ValueError(msg)
     objectives = {"PlainNSE": Objectives.PlainNSE, "ExtremeFlowBlend": Objectives.ExtremeFlowBlend}
     objective = objectives[str(payload.get("objective", "PlainNSE"))]
-    name = str(payload.get("name", ""))
+    name = str(payload.get("name", "mensal_" + secrets.token_hex(8)))
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
         msg = "Nome da calibração: use de 1 a 64 letras, números, hífen ou sublinhado."
         raise ValueError(msg)
     destination = station.station_dir / "Monthly/optim" / f"{name}.json"
-    if destination.exists():
-        msg = "Já existe uma calibração com esse nome. Escolha outro nome."
-        raise ValueError(msg)
     optim = CN3SOptimizer(
         inputs["prec_mm"],
         inputs["q_m3s"],
         CN3S(params, freq="M"),
-        train_ratio=float(payload.get("train_ratio", 0.9)),
+        train_ratio=ratio,
+        disjoint_split=True,
+        on_generation=lambda generation, value, candidate: calibration_generation(
+            job_id, generation, value, candidate, iterations
+        ),
         objective=objective,
     )
     progress(job_id, f"Calibrando com um trabalhador; limite de {iterations} iterações…")
     optim.optimize(
         maxiter=iterations,
-        tol=1e-4,
+        tol=tol,
+        atol=atol,
+        x0=None,
         workers=1,
         popsize=5,
         seed=int(payload.get("seed", 42)),
@@ -624,6 +784,24 @@ def calibrate(code: int, payload: dict[str, Any], job_id: str) -> dict[str, Any]
         saved = Path(temporary) / "calibration.json"
         optim.save(saved)
         artifact = json.loads(saved.read_text())
+    paired = optim.model.results.dropna(subset=["obs_q_m3s", "q_m3s"])
+    cutoff = pd.Timestamp(artifact["metadata"]["train_cutoff"])
+    artifact["metadata"].update(
+        until_convergence=until_convergence,
+        split_convention="test_starts_at_cutoff",
+        input_mtime_ns={
+            f: (station.station_dir / "Monthly" / f).stat().st_mtime_ns
+            for f in ("rain.parquet", "discharge.parquet")
+        },
+    )
+    for subset, pairs in (
+        ("train", paired.loc[paired.index < cutoff]),
+        ("test", paired.loc[paired.index >= cutoff]),
+    ):
+        artifact["metadata"][subset + "_period"] = (
+            [str(pairs.index.min().date()), str(pairs.index.max().date())] if len(pairs) else None
+        )
+        artifact["metadata"][subset + "_pairs"] = len(pairs)
     artifact["metadata"]["input_start"] = str(inputs.index.min().date())
     artifact["metadata"]["input_end"] = str(inputs.index.max().date())
     artifact["metadata"]["provenance"] = provenance(
@@ -632,18 +810,12 @@ def calibrate(code: int, payload: dict[str, Any], job_id: str) -> dict[str, Any]
             station.station_dir / "Monthly/discharge.parquet",
         ]
     )
-    figure = optim.plot_step(
-        int(artifact["metadata"]["final_step"]), title="Calibração mensal CN3S"
-    )
+    chart = calibration_chart(optim.model, inputs["prec_mm"], artifact["metadata"]["train_cutoff"])
     contents = json.dumps(artifact, ensure_ascii=False, allow_nan=False, indent=2).encode()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    # Exclusive creation also prevents accidental replacement by another local writer.
-    with destination.open("xb") as stream:
-        stream.write(contents)
     return {
         "artifacts": {
             "calibration.json": contents,
-            "calibration-chart.json": plot_artifact(figure),
+            "calibration-chart.json": chart,
             "calibration-inputs.csv": inputs.to_csv().encode(),
         },
         "charts": ["calibration-chart.json"],
@@ -651,6 +823,198 @@ def calibrate(code: int, payload: dict[str, Any], job_id: str) -> dict[str, Any]
         "calibration": destination.relative_to(station.station_dir).as_posix(),
         "warnings": ["Uma execução limitada não comprova convergência nem habilidade preditiva."],
     }
+
+
+def original_calibration_inputs(folder: Path, artifact: dict[str, Any]) -> pd.DataFrame:
+    """
+    Recover exactly the inputs used by a calibration.
+
+    Args:
+        folder: Prepared station directory.
+        artifact: Saved calibration, with original CSV or input checksums.
+
+    Returns:
+        Monthly rainfall and discharge from the original simulation window.
+
+    """
+    if "inputs_csv" in artifact:
+        return pd.read_csv(
+            io.StringIO(artifact["inputs_csv"]),
+            index_col=0,
+            parse_dates=True,
+            float_precision="round_trip",
+        )
+    metadata = artifact["metadata"]
+    recorded = metadata.get("provenance", {}).get("inputs", {})
+    files = [folder / "Monthly" / name for name in ("rain.parquet", "discharge.parquet")]
+    # Older web results can use local files only after their contents are verified.
+    if (
+        not metadata.get("input_start")
+        or not metadata.get("input_end")
+        or any(
+            not path.is_file()
+            or recorded.get(path.relative_to(data_root()).as_posix(), {}).get("sha256")
+            != fingerprint(path)["sha256"]
+            for path in files
+        )
+    ):
+        msg = "Os dados mensais originais desta calibração não estão disponíveis."
+        raise ValueError(msg)
+    rain, discharge = (pd.read_parquet(path) for path in files)
+    return rain.join(discharge).loc[metadata["input_start"] : metadata["input_end"]]
+
+
+def manual_calibration(code: int, payload: dict[str, Any], job_id: str) -> dict[str, Any]:
+    """
+    Evaluate edited parameters using the archived forcing and chronological split.
+
+    Args:
+        code: Historical ANA station code.
+        payload: Saved calibration identity and edited parameter values.
+        job_id: Initiating operation for progress reporting.
+
+    Returns:
+        Private review artifacts and the proposed new calibration identity.
+
+    """
+    folder = station_folder(code)
+    parent = str(payload.get("calibration", ""))
+    path = selected_calibration(folder, parent)
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    base = CN3SParams.from_file(path)
+    metadata = artifact["metadata"]
+    cutoff = metadata.get("train_cutoff")
+    if not cutoff:
+        msg = "A calibração original não registra o corte de treino e teste."
+        raise ValueError(msg)
+    updates = payload.get("params")
+    if not isinstance(updates, dict) or not updates or not updates.keys() <= set(PARAMETERS):
+        msg = "Informe parâmetros válidos para o ajuste manual."
+        raise ValueError(msg)
+    if any(type(value) not in {int, float} for value in updates.values()):
+        msg = "Informe valores numéricos para os parâmetros alterados."
+        raise ValueError(msg)
+    values = {key: float(value) for key, value in updates.items()}
+    if any(not math.isfinite(value) or value < 0 for value in values.values()) or (
+        "act" in values and not values["act"].is_integer()
+    ):
+        msg = "Use parâmetros finitos e não negativos. ACT deve ser um número inteiro de meses."
+        raise ValueError(msg)
+    if "act" in values:
+        values["act"] = int(values["act"])
+    changes = {
+        key: {"original": getattr(base, key), "adjusted": value}
+        for key, value in values.items()
+        if value != getattr(base, key)
+    }
+    if not changes:
+        msg = "Altere pelo menos um parâmetro para recalcular."
+        raise ValueError(msg)
+    inputs = original_calibration_inputs(folder, artifact)
+    progress(job_id, "Recalculando gráfico e indicadores…")
+    model = CN3S(replace(base, **values), freq="M")
+    model.run(inputs["prec_mm"], pbar=False)
+    if not np.isfinite(model.results["q_m3s"].to_numpy(dtype=float)).all():
+        msg = "O ajuste produziu vazões não finitas. Revise os parâmetros."
+        raise ValueError(msg)
+    model.results = model.results.join(inputs["q_m3s"].rename("obs_q_m3s"), how="left")
+    period_metrics = manual_metrics(model.results, metadata, pd.Timestamp(cutoff))
+    original_files = metadata.get("provenance", {}).get("inputs", {})
+    result_metadata = {
+        **metadata,
+        **period_metrics,
+        "status": "manual",
+        "saved_at": datetime.now(ZoneInfo("America/Sao_Paulo")).isoformat(),
+        "parent_calibration": parent,
+        "parent_name": metadata.get("display_name") or path.stem,
+        "parent_metrics": metadata.get("final_metrics", {}),
+        "parameter_changes": changes,
+        "iterations": None,
+        "nfev": None,
+        "final_step": None,
+        "message": None,
+        "solver_settings": None,
+        "provenance": {**provenance([]), "inputs": original_files},
+    }
+    for key in ("display_name", "until_convergence", "optimize_params", "integrality", "bounds"):
+        result_metadata.pop(key, None)
+    chart = calibration_chart(model, inputs["prec_mm"], cutoff)
+    contents = json.dumps(
+        {"params": asdict(model.params), "metadata": result_metadata, "history": []},
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode()
+    return {
+        "artifacts": {
+            "calibration.json": contents,
+            "calibration-chart.json": chart,
+            "calibration-inputs.csv": inputs.to_csv().encode(),
+        },
+        "charts": ["calibration-chart.json"],
+        "summary": result_metadata,
+        "calibration": f"Monthly/optim/mensal_{secrets.token_hex(8)}.json",
+    }
+
+
+def manual_metrics(
+    results: pd.DataFrame, metadata: dict[str, Any], cutoff: pd.Timestamp
+) -> dict[str, Any]:
+    """
+    Evaluate fixed train/test groups with the original objective configuration.
+
+    Args:
+        results: Simulated and observed monthly discharge in m³/s.
+        metadata: Original objective settings and cutoff convention.
+        cutoff: Original chronological split date.
+
+    Returns:
+        Objective and NSE per split, effective date ranges and pair counts.
+
+    """
+    config = metadata.get("objective", {})
+    settings = config.get("settings") or {}
+    match config.get("name"):
+        case "PlainNSE":
+            objective = Objectives.PlainNSE
+        case "NSETopBlend":
+            objective = NSETopBlend(**settings)
+        case "ExtremeFlowBlend" if "reference" not in settings:
+            objective = ExtremeFlowBlend(**settings)
+        case _:
+            msg = "A função objetivo original não pode ser reproduzida para o ajuste manual."
+            raise ValueError(msg)
+
+    paired = results[["q_m3s", "obs_q_m3s"]].dropna()
+    # Historical optimizer files included the cutoff date in both samples.
+    train = (
+        paired.loc[paired.index < cutoff]
+        if metadata.get("split_convention") == "test_starts_at_cutoff"
+        else paired.loc[:cutoff]
+    )
+    result: dict[str, Any] = {"final_metrics": {}}
+    for key, subset in (("train", train), ("test", paired.loc[cutoff:])):
+        nse = float(
+            compute_nse_from_frame(
+                subset,
+                observed_col="obs_q_m3s",
+                simulated_col="q_m3s",
+                on_too_few="neg_inf",
+            )
+        )
+        value = float(objective(subset)) if not subset.empty else math.inf
+        result["final_metrics"].update(
+            {
+                key + "_objective": value if math.isfinite(value) else None,
+                key + "_nse": nse if math.isfinite(nse) else None,
+            }
+        )
+        result[key + "_period"] = (
+            [str(subset.index.min().date()), str(subset.index.max().date())]
+            if len(subset)
+            else None
+        )
+        result[key + "_pairs"] = len(subset)
+    return result
 
 
 def inventory_fields(station: Station) -> dict[str, Any]:
@@ -751,6 +1115,87 @@ def prepare_overview(code: int, token: str, kind: str, temporary: str, job_id: s
     return station
 
 
+def preserve_outside_window(
+    destination: Path, staged: Path, start: pd.Timestamp, end: pd.Timestamp
+) -> None:
+    """
+    Keep previously prepared months outside the requested update.
+
+    Args:
+        destination: Published monthly Parquet.
+        staged: Newly prepared file awaiting publication.
+        start: Inclusive first month.
+        end: Inclusive last date.
+
+    """
+    new = pd.read_parquet(staged)
+    # Keep the requested calendar even when SQL has no discharge near its endpoints.
+    # NaN marks a queried month without observations and is excluded from scoring.
+    if staged.name == "discharge.parquet":
+        calendar = pd.date_range(start, end, freq="MS", name=new.index.name)
+        new = new.reindex(calendar)
+    if destination.exists():
+        old = pd.read_parquet(destination)
+        outside = old.loc[(old.index < start) | (old.index > end)]
+        new = pd.concat([outside, new]).sort_index()
+    new.to_parquet(staged)
+
+
+def prepare_monthly_inputs(
+    code: int,
+    payload: dict[str, Any],
+    token: str,
+    temporary: str,
+    job_id: str,
+) -> tuple[Station, str]:
+    """
+    Stage updated monthly inputs and report the active source.
+
+    Args:
+        code: Historical ANA station code.
+        payload: Source and inclusive month interval.
+        token: Delegated SQL token.
+        temporary: Same-volume staging directory.
+        job_id: Operation identifier for progress.
+
+    Returns:
+        Staged station and relative Parquet path.
+
+    """
+    folder = station_folder(code)
+    station = Station.from_folder(folder)
+    station.station_dir = Path(temporary) / str(code)
+    start, end = pd.Timestamp(payload["start"]), pd.Timestamp(payload["end"])
+    if pd.isna(start) or pd.isna(end) or start > end:
+        msg = "Informe um período válido para os dados mensais."
+        raise ValueError(msg)
+    series = payload["series"]
+    if series == "rain":
+        progress(job_id, "Baixando e processando chuva MERGE…")
+        downloader = Downloader(
+            file_downloader=FileDownloader(download_mode=DownloadMode.NO_UPDATE),
+            local_folder=str(data_root() / "downloads"),
+            parsers=InpeParsers,
+        )
+        station.download_rain(downloader, freq="M", start=str(start.date()), end=str(end.date()))
+    elif series == "discharge":
+        progress(job_id, "Consultando e agregando vazão mensal no SQL…")
+        # Include the whole last month when averaging the available daily discharge.
+        end = end + pd.offsets.MonthEnd(0)
+        conn = UserSqlConnector(token, cache=current_app.extensions["shc_sql_cache"])
+        try:
+            station.download_discharge(conn, freq="M", start=str(start.date()), end=str(end.date()))
+        finally:
+            conn.close()
+    else:
+        msg = "Selecione chuva ou vazão."
+        raise ValueError(msg)
+    name = f"Monthly/{series}.parquet"
+    progress(job_id, f"Publicando {name}…")
+    preserve_outside_window(folder / name, station.station_dir / name, start, end)
+    return station, name
+
+
 def prepare(
     code: int, payload: dict[str, Any], token: str, kind: str, job_id: str
 ) -> dict[str, Any]:
@@ -784,36 +1229,7 @@ def prepare(
             station = prepare_overview(code, token, kind, temporary, job_id)
             name = "overview.json"
         else:
-            station = Station.from_folder(folder)
-            station.station_dir = Path(temporary) / str(code)
-            start, end = pd.Timestamp(payload["start"]), pd.Timestamp(payload["end"])
-            if pd.isna(start) or pd.isna(end) or start > end:
-                msg = "Informe um período válido para os dados mensais."
-                raise ValueError(msg)
-            series = payload["series"]
-            if series == "rain":
-                downloader = Downloader(
-                    file_downloader=FileDownloader(download_mode=DownloadMode.NO_UPDATE),
-                    local_folder=str(data_root() / "downloads"),
-                    parsers=InpeParsers,
-                )
-                station.download_rain(
-                    downloader, freq="M", start=str(start.date()), end=str(end.date())
-                )
-            elif series == "discharge":
-                # Include the whole last month when averaging the available daily discharge.
-                end = end + pd.offsets.MonthEnd(0)
-                conn = UserSqlConnector(token, cache=current_app.extensions["shc_sql_cache"])
-                try:
-                    station.download_discharge(
-                        conn, freq="M", start=str(start.date()), end=str(end.date())
-                    )
-                finally:
-                    conn.close()
-            else:
-                msg = "Selecione chuva ou vazão."
-                raise ValueError(msg)
-            name = f"Monthly/{series}.parquet"
+            station, name = prepare_monthly_inputs(code, payload, token, temporary, job_id)
         files = [name]
         if kind == "prepare":
             # Publish geometry, metadata and observations in one filesystem operation.
@@ -824,7 +1240,8 @@ def prepare(
             destination = folder / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             # Both paths share a filesystem, so readers always see a complete snapshot.
-            (station.station_dir / name).replace(destination)
+            staged = station.station_dir / name
+            staged.replace(destination)
     return {
         "summary": {"files": files},
         "artifacts": {},
@@ -858,8 +1275,11 @@ def run_operation(
                 result = forecast(code, payload, token, job_id)
             elif kind == "calibrate":
                 result = calibrate(code, payload, job_id)
+            elif kind == "manual-calibration":
+                result = manual_calibration(code, payload, job_id)
             else:
                 result = prepare(code, payload, token, kind, job_id)
+            job = cache.get("cn3s:" + job_id) or job
             job.update(status="completed", result=result)
         except Exception as exc:
             app.logger.exception("CN3S operation failed: %s", kind)
@@ -913,6 +1333,9 @@ def index(step: str) -> str:
         stations=stations,
         models=MODEL_NAMES,
         bounds=CN3SParams().bounds,
+        default_iterations=DEFAULT_ITERATIONS,
+        max_iterations=MAX_ITERATIONS,
+        max_calibration_name=MAX_CALIBRATION_NAME,
         operation=session.get("cn3s_operation", ""),
     )
 
@@ -929,17 +1352,21 @@ def station_route(code: int) -> Response | tuple[Response, int]:
         Readiness JSON or a clear data/concurrency error.
 
     """
-    if request.args.get("view") == "station":
+    view = request.args.get("view")
+    if view in {"calibrations", "station"}:
         # Geometry is immutable and overview.json is replaced atomically.
         try:
-            return jsonify(station_summary(code))
+            summary = station_summary(code)
+            if view == "calibrations":
+                summary["calibrations"] = calibrations(station_folder(code))
+            return jsonify(summary)
         except (OSError, ValueError) as exc:
             return jsonify(error=f"Ficha indisponível: {exc}"), 400
     lock = current_app.extensions["cn3s_lock"]
     if not lock.acquire(blocking=False):
         return jsonify(error="Aguarde a operação CN3S terminar."), 409
     try:
-        return jsonify(station_info(code))
+        return jsonify(station_info(code, availability=view == "availability"))
     except (OSError, ValueError, KeyError) as exc:
         return jsonify(error=f"Estação incompleta: {exc}"), 400
     finally:
@@ -1080,7 +1507,7 @@ def start_operation(code: int, kind: str) -> tuple[Response, int]:
         Accepted operation ID or input/concurrency error.
 
     """
-    if kind not in {"prepare", "overview", "inputs", "calibrate", "forecast"} or code <= 0:
+    if kind not in CALIBRATION_RESULTS | {"prepare", "overview", "inputs", "forecast"} or code <= 0:
         return jsonify(error="Operação ou estação inválida."), 400
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
@@ -1159,6 +1586,10 @@ def operation_status(job_id: str) -> Response:
     """
     job = owned_operation(job_id)
     public = {k: v for k, v in job.items() if k not in {"owner", "run_id", "result"}}
+    if job["kind"] == "calibrate" and job["status"] == "running":
+        public["stop_requested"] = bool(
+            current_app.config["SESSION_CACHELIB"].get("cn3s-stop:" + job_id)
+        )
     if "result" in job:
         public["result"] = {k: v for k, v in job["result"].items() if k != "artifacts"}
         public["result"]["downloads"] = list(job["result"]["artifacts"])
@@ -1189,3 +1620,172 @@ def download(job_id: str, kind: str) -> Response:
         as_attachment=request.args.get("inline") != "1",
         download_name=f"CN3S-{job['code']}-{kind}",
     )
+
+
+@bp.post("/operations/<job_id>/stop")
+def stop_calibration(job_id: str) -> tuple[Response, int]:
+    """
+    Request a cooperative stop after the current generation.
+
+    Args:
+        job_id: Owner-scoped calibration operation.
+
+    Returns:
+        Whether the stop was requested while training was still active.
+
+    """
+    job = owned_operation(job_id)
+    if job["kind"] != "calibrate":
+        return jsonify(error="A operação não é um treino de calibração."), 409
+    requested = job["status"] == "running"
+    if requested:
+        # Keep this signal separate so a concurrent worker update cannot overwrite it.
+        current_app.config["SESSION_CACHELIB"].set("cn3s-stop:" + job_id, value=True, timeout=TTL)
+    return jsonify(stop_requested=requested), 200
+
+
+@bp.post("/operations/<job_id>/save")
+def save_calibration(job_id: str) -> tuple[Response, int]:
+    """
+    Atomically publish the reviewed result for the initiating session.
+
+    Args:
+        job_id: Owner-scoped completed training job.
+
+    Returns:
+        Saved calibration identifier or a conflict.
+
+    """
+    lock = current_app.extensions["cn3s_lock"]
+    if not lock.acquire(blocking=False):
+        return jsonify(error="Aguarde a operação CN3S em andamento."), 409
+    try:
+        job = owned_operation(job_id)
+        if job["kind"] not in CALIBRATION_RESULTS or job["status"] != "completed":
+            return jsonify(error="Calibração indisponível para salvar."), 409
+        result = job["result"]
+        identifier = result["calibration"]
+        destination = station_folder(job["code"]) / identifier
+        if job.get("published") and not destination.exists():
+            return jsonify(error="A calibração publicada foi apagada."), 409
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        artifact = json.loads(result["artifacts"]["calibration.json"])
+        payload = request.get_json(silent=True)
+        raw_name = payload.get("name") if isinstance(payload, dict) else None
+        name = raw_name.strip() if isinstance(raw_name, str) else ""
+        if not 1 <= len(name) <= MAX_CALIBRATION_NAME or not name.isprintable():
+            return jsonify(error=f"Informe um nome de 1 a {MAX_CALIBRATION_NAME} caracteres."), 400
+        artifact["metadata"]["display_name"] = name
+        artifact["inputs_csv"] = result["artifacts"]["calibration-inputs.csv"].decode()
+        artifact["chart"] = json.loads(result["artifacts"]["calibration-chart.json"])
+        contents = json.dumps(artifact, ensure_ascii=False, allow_nan=False).encode()
+        if destination.exists():
+            if destination.read_bytes() != contents:
+                return jsonify(error="Já existe uma calibração com esse nome."), 409
+        else:
+            with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
+                staged = Path(temporary) / "calibration.json"
+                staged.write_bytes(contents)
+                destination.hardlink_to(staged)
+        cache = current_app.config["SESSION_CACHELIB"]
+        job["published"] = True
+        cache.set("cn3s:" + job_id, job, timeout=TTL)
+        return jsonify(calibration=identifier), 200
+    finally:
+        lock.release()
+
+
+@bp.post("/operations/<job_id>/discard")
+def discard_calibration(job_id: str) -> tuple[Response, int]:
+    """
+    Release an unpublished calibration from the current session.
+
+    Args:
+        job_id: Owner-scoped training job.
+
+    Returns:
+        Discard status.
+
+    """
+    lock = current_app.extensions["cn3s_lock"]
+    if not lock.acquire(blocking=False):
+        return jsonify(error="Aguarde a operação CN3S em andamento."), 409
+    try:
+        job = owned_operation(job_id)
+        if (
+            job["kind"] not in CALIBRATION_RESULTS
+            or job["status"] != "completed"
+            or job.get("published")
+        ):
+            return jsonify(error="Calibração indisponível para descartar."), 409
+        current_app.config["SESSION_CACHELIB"].delete("cn3s:" + job_id)
+        return jsonify(discarded=True), 200
+    finally:
+        lock.release()
+
+
+@bp.post("/stations/<int:code>/calibrations/delete")
+def delete_calibration(code: int) -> tuple[Response, int]:
+    """
+    Delete one selected calibration from the station's shared catalog.
+
+    Args:
+        code: Historical ANA station code.
+
+    Returns:
+        Deletion status or a clear conflict.
+
+    """
+    lock = current_app.extensions["cn3s_lock"]
+    if not lock.acquire(blocking=False):
+        return jsonify(error="Aguarde a operação CN3S em andamento."), 409
+    try:
+        payload = request.get_json(silent=True)
+        identifier = str(payload.get("calibration", "")) if isinstance(payload, dict) else ""
+        path = selected_calibration(station_folder(code), identifier)
+        path.unlink()
+        return jsonify(deleted=True), 200
+    except (OSError, ValueError) as exc:
+        return jsonify(error=str(exc)), 400
+    finally:
+        lock.release()
+
+
+@bp.get("/stations/<int:code>/calibrations/chart")
+def saved_calibration_chart(code: int) -> Response | tuple[Response, int]:
+    """
+    Return the archived figure or rebuild it using the current monthly files.
+
+    Args:
+        code: Historical ANA station code.
+
+    Returns:
+        Plotly chart for the selected parameters, or an input error.
+
+    """
+    folder = station_folder(code)
+    try:
+        path = selected_calibration(folder, request.args.get("calibration", ""))
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+        if "chart" in artifact and request.args.get("refresh") != "1":
+            return jsonify(artifact["chart"])
+        metadata = artifact["metadata"]
+        rain = pd.read_parquet(folder / "Monthly/rain.parquet")["prec_mm"]
+        flow = pd.read_parquet(folder / "Monthly/discharge.parquet")["q_m3s"]
+        start = pd.Timestamp(metadata.get("input_start") or rain.index.min())
+        end = pd.Timestamp(metadata.get("input_end") or rain.index.max())
+        rain = rain.loc[start:end]
+        if (
+            not rain.index.equals(pd.date_range(start, end, freq="MS"))
+            or not np.isfinite(rain).all()
+        ):
+            msg = "A chuva no período da calibração precisa ser contínua."
+            return jsonify(error=msg), 400
+        model = CN3S(CN3SParams.from_file(path), freq="M")
+        model.run(rain, pbar=False)
+        # The chart can show simulated discharge even in months with no observations.
+        model.results = model.results.join(flow.loc[start:end].rename("obs_q_m3s"), how="left")
+        chart = calibration_chart(model, rain, metadata.get("train_cutoff"))
+        return current_app.response_class(chart, mimetype="application/json")
+    except (OSError, ValueError, KeyError) as exc:
+        return jsonify(error=str(exc)), 400

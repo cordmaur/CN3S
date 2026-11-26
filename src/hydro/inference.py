@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -52,6 +53,11 @@ class Inference:
         calibration = Path(optimization)
         if calibration.name == optimization:
             calibration = Path("optim") / calibration
+        self.input_start = (
+            json.loads((station.station_dir / calibration).read_text())
+            .get("metadata", {})
+            .get("input_start")
+        )
         self.params = CN3SParams.from_file(station.station_dir / calibration)
         self.model = CN3S(self.params, freq="M")
 
@@ -111,6 +117,12 @@ class Inference:
             "prec_mm"
         ].copy()
         history = history.loc[history.index < forecast_start]
+        if self.input_start:
+            origin = pd.Timestamp(self.input_start)
+            if origin not in history.index:
+                msg = "Histórico de chuva indisponível na origem da calibração."
+                raise ValueError(msg)
+            history = history.loc[origin:]
         climatology = self.rainfall.data["climatology"]["basin_mean"].sel(time=forecast.time)
         future_rain = pd.DataFrame(
             {

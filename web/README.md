@@ -201,8 +201,7 @@ O Makefile passa a variável ao Compose; comandos `docker compose` executados
 diretamente ainda precisam dela exportada no terminal. O Compose não cria a pasta
 do host se ela não existir. O volume
 é de leitura/escrita para inserir estações e salvar limites. Os resultados
-científicos permanecem após a recriação do container; sessões, análises e gráficos
-temporários ficam no próprio container e podem ser descartados.
+científicos permanecem após a recriação do container; o cache de sessões e resultados temporários fica no volume Docker shc-sessions e respeita a expiração de cada entrada.
 
 Teste `http://127.0.0.1:8000/shc` no Windows (com o `deploy-dev` parado) e depois
 pelo IIS/Mac; feche o VS Code e teste novamente. A imagem inclui
@@ -229,8 +228,7 @@ institucional deve usar uma inscrição de aplicativo aprovada pela organizaçã
 Cada visitante tem credencial e token próprios. O token nunca é retornado no
 HTML, JSON público ou cookie. `UserSqlConnector` reutiliza as operações SQL sem
 abrir o cache compartilhado dos notebooks. `SqlConnector` permanece inalterado.
-O token é usado até expirar; nesse caso, o usuário entra novamente. A SHC atual
-não implementa renovação automática de tokens.
+O SHC renova silenciosamente o token SQL com o cache MSAL privado da sessão. A sessão expira após oito horas sem requisições autenticadas. Configure o prazo em horas com `SHC_SESSION_IDLE_HOURS`. Sair remove o cache da conta daquela sessão. A política institucional pode exigir nova entrada antes desse prazo.
 
 O ambiente atual usa HTTP na rede/VPN. Ao configurar HTTPS, defina
 `SHC_COOKIE_SECURE=true` no ambiente do servidor/container. `FLASK_SECRET_KEY`
@@ -352,12 +350,20 @@ Use uma **cópia de trabalho das estações** para experimentar essas ações.
 Calibrações novas ficam em `stations/<código>/Monthly/optim/<nome>.json` e nunca
 substituem silenciosamente um arquivo existente. Os arquivos antigos em
 `stations/<código>/optim/` continuam disponíveis, mas frequência e unidade de
-ACT devem ser explicitamente mensais nos metadados. A calibração preserva o
-início do histórico salvo porque `r0` depende dessa origem; permite escolher o
-mês final, a divisão cronológica, objetivo, aquecimento, limites e semente.
-O padrão é cinco iterações, população de cinco por parâmetro e um trabalhador;
-o limite da interface é vinte iterações, sem polimento. O resultado informa se
-o solver convergiu ou parou pelo limite.
+ACT devem ser explicitamente mensais nos metadados. O primeiro mês dos dados define a origem da chuva e de `r0`, reutilizada na previsão. O aquecimento fica dentro do período. O formulário permite escolher objetivo, limites, semente e relação treino/teste de 10/90 a 95/5 em passos de cinco pontos percentuais. O corte pertence ao teste. O padrão é 20 gerações e o limite pode ser configurado de 1 a 1.000. A execução usa um trabalhador, população de cinco por parâmetro e sem polimento. Treinar até convergência permite ajustar tol e atol com teto de 1.000 gerações. O resultado informa se
+o solver convergiu, atingiu o limite ou foi interrompido pelo usuário. O acompanhamento exibe a função objetivo
+e os melhores parâmetros por geração. **Parar treino** encerra após a geração atual e abre para revisão o melhor resultado encontrado. Depois de revisar o gráfico e as métricas,
+use **Salvar calibração** para publicar o resultado ou **Descartar resultado**.
+Na revisão de uma calibração salva, **Atualizar dados** refaz o gráfico com os
+Parquets atuais e os mesmos parâmetros. **Apagar calibração** remove do disco
+o arquivo selecionado após confirmação.
+
+**Ajuste manual** reavalia os parâmetros editados com o período, os dados e o
+corte da calibração de origem. As métricas originais e ajustadas aparecem lado
+a lado. Ao salvar um treino ou ajuste, informe o nome que aparecerá no
+histórico. Cada novo resultado inclui o gráfico e uma cópia das entradas
+usadas. Para calibrações anteriores sem essa cópia, o ajuste manual verifica
+o SHA-256 dos arquivos mensais disponíveis contra o registro original.
 
 A aquisição CDS permanece no notebook 03. O módulo exige os arquivos `prec` e
 `hindcast` dos nove centros para a inicialização selecionada; os arquivos

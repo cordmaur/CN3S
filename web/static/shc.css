@@ -230,3 +230,30 @@ dialog{padding:20px}
 #cn-map-note:empty,#cn-phase:empty,#cn-dialog-error:empty,.cn-summary:empty{display:none}
 #cn-details [aria-pressed=false]{background:var(--soft);color:var(--blue)}
 @media(max-width:720px){.cn-station-grid{grid-template-columns:minmax(0,1fr);gap:0}.cn-selector:has(button){align-items:stretch;flex-direction:column;gap:0}}
+
+/* Calibration form and progress are part of the main page. */
+.calibration-columns {border:0;padding:0;margin:0;min-width:0;display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:24px}
+.calibration-bounds {border-left:1px solid var(--line);padding-left:24px}
+.calibration-fields {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 10px}
+.calibration-actions {display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+.calibration-actions p {margin:0 auto 0 0}
+#historyLabel {flex:1;min-width:0}
+#calibration-setup details,#review details {margin:9px 0;padding-top:7px}
+#calibration-setup input:not([type=checkbox]),#calibration-setup select {padding:5px 8px;margin:3px 0 8px}
+#calibration-setup select {padding-right:30px}
+#calibration-setup .calibration-bounds input {margin:0}
+#calibration-setup th,#calibration-setup td,#review th,#review td {padding:5px 8px}
+.calibration-table {overflow:auto}
+#prepProgress,#runProgress {display:block;width:100%;accent-color:var(--blue)}
+#setupError,#reviewError,#boundError {color:#9e372a}
+@media(max-width:760px){
+  .calibration-columns {grid-template-columns:minmax(0,1fr);gap:12px}
+  .calibration-bounds {border-left:0;border-top:1px solid var(--line);padding:12px 0 0}
+  .calibration-fields {grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
+#manualFields {border:0;padding:0;margin:0;min-width:0}
+#manualForm {margin-top:16px;padding:12px 16px;background:#f4f8fa;border:1px solid var(--line)}
+#calibrationNameDialog {width:min(440px,92vw);padding:22px;color:inherit;border:1px solid var(--line);border-radius:10px}
+#calibrationNameDialog::backdrop {background:#16314166}
+#saveError {color:#9e372a}

@@ -13,9 +13,10 @@
     const response = await fetch(root + path, payload === undefined ? {cache: 'no-store'} : {
       method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf}, body: JSON.stringify(payload)
     });
+    if (response.status === 404) throw new Error('Operação expirada ou indisponível.');
     if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Resposta indisponível. Recarregue a página.');
     const data = await response.json();
-    if (data.login_required) { location.assign('/shc/login'); throw new Error(data.error); }
+    if (data.login_required) { location.reload(); throw new Error(data.error); }
     if (!response.ok) throw Object.assign(new Error(data.error || 'Operação expirada ou indisponível.'), {status: response.status});
     return data;
   }
@@ -278,6 +279,422 @@
       await load(resume ? id : null);
     }
   }
+  function calibrationName(run) {
+    const stem = run.id.split('/').at(-1).replace(/\.json$/,'');
+    return run.metadata?.display_name || (/^mensal_[a-f0-9]{16}$/.test(stem) ? 'Calibração mensal' : stem);
+  }
+  function calibrationLabel(run) {
+    if (!run.compatible) return calibrationName(run)+' · incompatível';
+    const stamp = Date.parse(run.metadata?.saved_at);
+    const date = Number.isFinite(stamp) ? new Date(stamp).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'}) : 'Data indisponível';
+    return [calibrationName(run),date,run.metadata?.objective?.name].filter(Boolean).join(' · ');
+  }
+  async function calibrationPage() {
+    const select = $('cn-station'), form = $('calibration-form');
+    const chartOptions = {responsive:true, locale:'pt-BR', displaylogo:false};
+    let catalog = [], series = {}, overview, running = false, draft = '', chartVersion = 0;
+    let manualParent = null, manualDirty = false;
+    const manualInputs = [...document.querySelectorAll('[data-manual-param]')];
+    const nameDialog = $('calibrationNameDialog');
+    function checkBounds(){
+     const rows=Array.from($('bounds').rows);
+     const invalid=rows.find(tr=>{
+      const [lo,hi]=tr.querySelectorAll('input');
+      return !lo.validity.valid || !hi.validity.valid || lo.valueAsNumber>=hi.valueAsNumber;
+     });
+     $('boundError').textContent=invalid ? invalid.cells[0].textContent+' · Informe limites não negativos com mínimo menor que máximo. ACT usa meses inteiros.' : '';
+     return !invalid;
+    }
+    function solverMode(){
+     const checked=$('converge').checked;
+     $('iterLabel').hidden=$('iter').disabled=checked;
+     $('tolerances').hidden=$('tol').disabled=$('atol').disabled=!checked;
+    }
+
+    const keys = Array.from($('bounds').rows, tr => tr.dataset.param);
+    function cells(tr, values, tag='td') {
+      for (const value of values) {
+        const cell = document.createElement(tag);
+        cell.textContent = value;
+        tr.append(cell);
+      }
+    }
+    document.querySelectorAll('.calibration-parameter-head').forEach(row =>
+      cells(row, Array.from($('bounds').rows, tr => tr.cells[0].textContent), 'th'));
+    function review(run, saved) {
+      $('review').hidden = !run;
+      $('reviewError').textContent = '';
+      $('chartStatus').textContent = '';
+      if (!run) { ++chartVersion; return; }
+      const m = run.metadata, metrics = m.final_metrics || {};
+      $('period').textContent = [saved ? 'Calibração salva' : 'Resultado em avaliação',
+        m.display_name, m.status === 'manual' ? 'Ajuste manual' : '', m.objective?.name, m.input_start && m.input_end ? m.input_start+' a '+m.input_end : '',
+        Number.isInteger(m.iterations) ? m.iterations+' gerações' : '',
+        m.status === 'completed' ? 'Convergência atingida' :
+          m.status === 'stopped_by_user' ? 'Treino interrompido pelo usuário' :
+          m.status === 'stopped' ? 'Limite de gerações atingido' : m.message,
+        run.inputs_changed ? 'Os arquivos mensais mudaram desde a calibração.' : '',
+        saved && !run.has_chart ? 'Gráfico reconstituído com os dados mensais disponíveis.' : ''].filter(Boolean).join(' · ');
+      for (const id of ['refreshChart','deleteCalibration','editManual']) $(id).hidden = !saved || Boolean(manualParent);
+      $('saveCalibration').textContent = m.status === 'manual' ? 'Salvar como nova calibração' : 'Salvar calibração';
+      for (const id of ['saveCalibration','discard']) $(id).hidden = saved;
+      $('params').replaceChildren();
+      cells($('params'),keys.map(k => number(run.params[k])));
+      const baseline = saved ? null : m.parent_metrics;
+      $('scoreHead').replaceChildren();
+      cells($('scoreHead'), baseline ? ['Amostra','Objetivo original ↓','Objetivo ajustado ↓','NSE original ↑','NSE ajustado ↑'] :
+        ['Amostra','Função objetivo ↓','NSE ↑'], 'th');
+      $('scores').replaceChildren();
+      for (const [key,label] of [['train','Treino'],['test','Teste']]) {
+        const objective = key+'_objective', nse = key+'_nse';
+        const values = baseline ? [baseline[objective], metrics[objective], baseline[nse], metrics[nse]] :
+          [metrics[objective], metrics[nse]];
+        cells($('scores').insertRow(),[label,...values.map(number)]);
+      }
+    }
+    async function drawReview(path, refreshed=false) {
+      const version = ++chartVersion;
+      if (!refreshed) Plotly.purge($('finalChart'));
+      $('chartStatus').textContent = refreshed ? 'Atualizando gráfico com os arquivos mensais…' : 'Carregando gráfico…';
+      try {
+        const figure = await api(path);
+        if (version !== chartVersion) return;
+        await Plotly.react($('finalChart'), figure.data, figure.layout, chartOptions);
+        if (version === chartVersion) $('chartStatus').textContent = refreshed ?
+          'Gráfico atualizado com os arquivos mensais atuais. As métricas exibidas são as da calibração salva.' : '';
+      } catch (exc) {
+        if (version === chartVersion) $('chartStatus').textContent = exc.message;
+      }
+    }
+    function renderRun(refreshed=false) {
+      const run = catalog.find(c => c.compatible && c.id === $('history').value);
+      review(run,true);
+      if (run) return drawReview('/stations/'+select.value+'/calibrations/chart?calibration='+encodeURIComponent(run.id)+(refreshed?'&refresh=1':''),refreshed);
+    }
+    function showHistory() {
+      draft = ''; manualParent = null; manualDirty = false; $('manualForm').hidden = true;
+      $('calibration-setup').hidden = $('execution').hidden = true;
+      $('panel').hidden = false;
+      review(null,true);
+    }
+    async function load(preferredId) {
+      const code = select.value, version = ++selection;
+      rememberStation(code); showHistory(); error(); $('panel').hidden = true;
+      $('cn-station-info').textContent = code ? 'Carregando…' : 'Selecione uma estação.';
+      if (!code) return;
+      let data;
+      try { data = await api('/stations/'+code+'?view=calibrations'); }
+      catch (exc) { if (selection === version) error(exc.message); return; }
+      if (selection !== version) return;
+      overview = data.overview;
+      catalog = data.calibrations.sort((a,b) => Number(b.compatible)-Number(a.compatible) ||
+        (Date.parse(b.metadata?.saved_at)||0)-(Date.parse(a.metadata?.saved_at)||0) || a.id.localeCompare(b.id));
+      $('cn-station-info').textContent = data.metadata.station_name+' · '+code;
+      $('panel').hidden=false;
+      $('history').replaceChildren(...catalog.map(c=>option(c.id,calibrationLabel(c),!c.compatible)));
+      $('historyLabel').hidden=!catalog.length;
+      $('empty').textContent=catalog.some(c=>c.compatible)?'':'Nenhuma calibração mensal compatível.';
+      if (catalog.some(c=>c.id===preferredId)) $('history').value=preferredId;
+      return renderRun();
+    }
+    function availability() {
+      const a=$('start').value, b=$('end').value;
+      const date=new Date(a+'-01T00:00:00Z');
+      date.setUTCMonth(date.getUTCMonth()+Number($('warm').value));
+      const first=Number.isFinite(date.getTime()) ? date.toISOString().slice(0,7) : '';
+      const valid=a && b && $('warm').validity.valid && first && first<=b;
+      $('first').textContent=first ? 'Primeiro mês simulado com ACT = 0: '+first+'.' : '';
+      const needs=[];
+      if (valid) {
+        const rain=new Set(series.rain?.months);
+        const cursor=new Date(a+'-01T00:00:00Z');
+        while (cursor.toISOString().slice(0,7)<=b) {
+          if (!rain.has(cursor.toISOString().slice(0,7))) {needs.push('rain');break;}
+          cursor.setUTCMonth(cursor.getUTCMonth()+1);
+        }
+        if (!series.discharge?.start || series.discharge.start.slice(0,7)>a || series.discharge.end.slice(0,7)<b) needs.push('discharge');
+      }
+      const pairs=(series.discharge?.months||[]).filter(m=>m>=first && m<=b).length;
+      const split=Math.floor(pairs*(Number($('ratio').value)/100));
+      const enough=Math.min(split,pairs-split)>=2;
+      $('notice').textContent=!valid?'Confira o período e o aquecimento.':needs.length?'Preparar '+needs.map(k=>k==='rain'?'chuva MERGE':'vazão SQL').join(' e ')+'.':
+        pairs+' meses com vazão após o aquecimento (ACT = 0). '+(enough?'':'Aumente o intervalo ou ajuste a relação treino/teste.');
+      if (b===new Date().toISOString().slice(0,7)) $('notice').textContent+=' O mês atual pode estar parcial.';
+      $('prepare').hidden=!needs.length;
+      const boundsOK=checkBounds();
+      $('prepare').disabled=running || !valid || Boolean(draft);
+      $('run').disabled=running || !valid || !!needs.length || !enough || !boundsOK || Boolean(draft);
+      return needs;
+    }
+    async function coverage(initial) {
+      const data=await api('/stations/'+select.value+'?view=availability');
+      series=data.series;
+      $('monthlyCsv').hidden=!series.rain || !series.discharge;
+      $('monthlyCsv').href=root+'/stations/'+select.value+'/inputs.csv';
+      $('coverage').textContent=['rain','discharge'].map(k=>(k==='rain'?'Chuva':'Vazão')+' · '+(series[k]?.start?series[k].start+' a '+series[k].end:'ausente')).join(' | ');
+      if(initial){
+        const [year,month] = new Intl.DateTimeFormat('sv-SE',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit'}).format(new Date()).split('-').map(Number);
+        $('end').value = new Date(Date.UTC(year,month-2,1)).toISOString().slice(0,7);
+      }
+      availability();
+    }
+    async function watch(id, onUpdate) {
+      for (;;) {
+        const job = await api('/operations/'+id);
+        if (job.status === 'failed') throw new Error(job.error);
+        onUpdate?.(job);
+        if (job.status !== 'running') return job;
+        await new Promise(resolve=>setTimeout(resolve,1000));
+      }
+    }
+    function lock(value) {
+      running = value;
+      for (const control of [select,...['settings','create','cancel','history','refreshChart',
+        'deleteCalibration','editManual','manualFields','recalculate','cancelManual','confirmSave','cancelSave',
+        'saveCalibration','discard'].map($)]) control.disabled = value;
+      $('saveCalibration').disabled = value || manualDirty;
+      availability();
+    }
+    async function trainReview(id) {
+      $('execution').hidden = false;
+      $('executionTitle').focus();
+      $('runStatus').textContent = 'Inicializando a população…';
+      const progress = $('runProgress');
+      progress.removeAttribute('value');
+      $('bestParams').replaceChildren();
+      Plotly.purge($('liveChart'));
+      let count = -1;
+      const stop = $('stopTraining'), stopStatus = $('stopStatus');
+      let requestingStop = false;
+      stopStatus.textContent = '';
+      stop.onclick = async () => {
+        requestingStop = true;
+        stop.disabled = true;
+        stopStatus.textContent = 'Solicitando parada…';
+        try {
+          const result = await api('/operations/'+id+'/stop',{});
+          stopStatus.textContent = result.stop_requested ? 'Parada solicitada. Aguardando o fim da geração atual…' : '';
+        } catch (exc) {
+          requestingStop = false;
+          stop.disabled = false;
+          stopStatus.textContent = exc.message;
+        }
+      };
+      try {
+        await watch(id, job => {
+          stop.hidden = job.status !== 'running';
+          stop.disabled = requestingStop || job.stop_requested;
+          if (job.stop_requested) stopStatus.textContent = 'Parada solicitada. Aguardando o fim da geração atual…';
+
+          const generations = job.generations || [];
+          const latest = generations.at(-1);
+          $('runStatus').textContent = job.status === 'completed' ? 'Treino concluído' :
+            job.phase+(latest?.[1] != null ? ' · Melhor objetivo de treino '+number(latest[1]) : '');
+          if (job.status === 'completed' || !job.settings.until_convergence) {
+            progress.max = job.status === 'completed' ? Math.max(1,generations.length) : (job.settings.maxiter || 20);
+            progress.value = job.status === 'completed' ? progress.max : generations.length;
+          }
+          if (count === generations.length) return;
+          count = generations.length;
+          $('bestParams').replaceChildren();
+          if (job.best_params) cells($('bestParams'),keys.map(key=>number(job.best_params[key])));
+          Plotly.react($('liveChart'),[{x:generations.map(row=>row[0]),y:generations.map(row=>row[1]),
+            mode:'lines+markers',name:'Melhor objetivo de treino',line:{color:'#145d83'}}],
+            {height:300,margin:{l:65,r:20,t:16,b:50},xaxis:{title:{text:'Geração'},dtick:generations.length <= 20 ? 1 : undefined},
+              yaxis:{title:{text:'Objetivo de treino'}},separators:',.'},chartOptions);
+        });
+      } finally {
+        stop.hidden = true;
+        stop.onclick = null;
+        stopStatus.textContent = '';
+      }
+      const artifact = await api('/operations/'+id+'/download/calibration.json?inline=1');
+      draft = id;
+      if (artifact.metadata.status === 'stopped_by_user') $('runStatus').textContent='Treino interrompido após '+artifact.metadata.iterations+' gerações.';
+      review(artifact,false);
+      await drawReview('/operations/'+id+'/download/calibration-chart.json?inline=1');
+      $('reviewTitle').focus();
+    }
+    async function execute(prepare) {
+      const code=select.value, start=$('start').value+'-01', end=$('end').value+'-01';
+      const needs=availability();
+      if (prepare && needs.some(k=>series[k]) && !window.confirm('Atualizar os arquivos mensais compartilhados de '+start+' a '+end+'? Os meses fora do intervalo serão preservados.')) return;
+      lock(true); $('setupError').textContent='';
+      try {
+        if (prepare) {
+          $('prepStatus').hidden=false;
+          $('prepProgress').max=needs.length;
+          $('prepProgress').value=0;
+          for (const [index,key] of needs.entries()) {
+            const prefix=(index+1)+' de '+needs.length+' · '+(key==='rain'?'Chuva MERGE':'Vazão SQL');
+            $('prepText').textContent=prefix;
+            const job=await api('/stations/'+code+'/inputs',{series:key,start,end,replace:true});
+            await watch(job.operation_id, state=>{$('prepText').textContent=prefix+' · '+state.phase;});
+            $('prepProgress').value=index+1;
+          }
+          $('prepText').textContent='Preparo concluído.';
+          await coverage(false);
+        } else {
+          const bounds=Object.fromEntries(Array.from($('bounds').rows,tr=>[tr.dataset.param,Array.from(tr.querySelectorAll('input'),i=>i.valueAsNumber)]));
+          const payload={start,end,bounds,objective:$('objective').value,train_ratio:Number($('ratio').value)/100,
+            seed:$('seed').valueAsNumber,warmup_steps:$('warm').valueAsNumber,until_convergence:$('converge').checked,
+            maxiter:$('iter').valueAsNumber,tol:$('converge').checked?$('tol').valueAsNumber:0.0001,atol:$('converge').checked?$('atol').valueAsNumber:0};
+          $('execution').hidden=false;
+          $('runStatus').textContent='Iniciando calibração…';
+          const job=await api('/stations/'+code+'/calibrate',payload);
+          await trainReview(job.operation_id);
+        }
+      } catch (exc) {
+        if (prepare) {
+          $('prepText').textContent += ' · Preparo interrompido.';
+          await coverage(false).catch(()=>{});
+        } else {
+          $('runStatus').textContent = exc.message;
+          $('runProgress').hidden = true;
+        }
+        $('setupError').textContent=exc.message;
+      } finally {
+        lock(false);
+      }
+    }
+    $('create').onclick=async()=>{
+      form.reset(); solverMode(); $('setupError').textContent='';
+      $('panel').hidden=$('prepStatus').hidden=$('execution').hidden=true;
+      $('calibration-setup').hidden=false;
+      review(null,true);
+      $('stamp').textContent=overview?.updated_at?'Resumo de '+overview.updated_at:'Resumo ausente. Atualize as estatísticas na etapa Estação.';
+      $('stats').replaceChildren();
+      for(const [i,row] of (overview?.data||[]).entries()){
+        const field=(g,k)=>row[overview.columns.findIndex(([group,metric])=>group===g && (!k||metric===k))];
+        cells($('stats').insertRow(),[field('Fonte')+' / '+overview.index[i],(field('vazao','Inicio')||'—')+' a '+(field('vazao','Fim')||'—'),number(field('vazao','Anos (Efet.)')),number(field('vazao','Falhas (%)'))]);
+      }
+      series={}; lock(true);
+      try { await coverage(true); }
+      catch (exc) { $('setupError').textContent=exc.message; }
+      finally { lock(false); }
+      $('start').focus();
+    };
+    function editManual(parent, params) {
+      manualParent = parent;
+      manualDirty = false;
+      $('panel').hidden = true;
+      $('manualForm').hidden = false;
+      for (const input of manualInputs) input.value = params[input.dataset.manualParam];
+      for (const id of ['refreshChart','deleteCalibration','editManual']) $(id).hidden = true;
+      $('manualStatus').textContent = '';
+    }
+    async function reviewManual(id, parent) {
+      const artifact = await api('/operations/'+id+'/download/calibration.json?inline=1');
+      draft = id;
+      const original = catalog.find(c=>c.id===parent);
+      if (original) editManual(original,artifact.params);
+      review(artifact,false);
+      await drawReview('/operations/'+id+'/download/calibration-chart.json?inline=1');
+    }
+    $('editManual').onclick=()=>{
+      const parent=catalog.find(c=>c.id===$('history').value);
+      if (!parent) return;
+      editManual(parent,parent.params);
+      manualInputs[0].focus();
+    };
+    $('manualForm').oninput=()=>{
+      manualDirty = Boolean(draft);
+      $('saveCalibration').disabled = running || manualDirty;
+      if (draft) $('manualStatus').textContent='Recalcule antes de salvar os valores alterados.';
+    };
+    $('manualForm').onsubmit=async event=>{
+      event.preventDefault();
+      if (running || !manualParent) return;
+      const parent=manualParent.id;
+      const params=Object.fromEntries(manualInputs.map(input=>[input.dataset.manualParam,input.valueAsNumber]));
+      lock(true);
+      $('reviewError').textContent='';
+      $('manualStatus').textContent='Recalculando…';
+      try {
+        const job = await api('/stations/'+select.value+'/manual-calibration',{calibration:parent,params});
+        await watch(job.operation_id);
+        const previous = draft;
+        await reviewManual(job.operation_id,parent);
+        if (previous) await api('/operations/'+previous+'/discard',{}).catch(()=>{});
+        $('manualStatus').textContent='Indicadores recalculados.';
+      } catch (exc) { $('manualStatus').textContent=exc.message; }
+      finally { lock(false); }
+    };
+    async function finish(action, payload={}) {
+      lock(true);
+      const errorNode = $(action==='save'?'saveError':'reviewError');
+      errorNode.textContent='';
+      try {
+        const result=await api('/operations/'+draft+'/'+action,payload);
+        if (nameDialog.open) nameDialog.close();
+        await load(result.calibration || manualParent?.id);
+        $('create').focus();
+      } catch (exc) { errorNode.textContent=exc.message; }
+      finally { lock(false); }
+    }
+    $('cancelManual').onclick=()=>{ if (draft) finish('discard'); else load(manualParent?.id); };
+    $('cancel').onclick=async()=>{ if (draft) await finish('discard'); else await load(); };
+    form.oninput=availability; $('converge').onchange=solverMode;
+    $('prepare').onclick=()=>execute(true);
+    form.onsubmit=e=>{e.preventDefault();$('runProgress').hidden=false;execute(false);};
+    $('saveCalibration').onclick=()=>{
+      $('saveError').textContent='';
+      $('calibrationName').value='';
+      nameDialog.showModal();
+    };
+    $('cancelSave').onclick=()=>nameDialog.close();
+    nameDialog.oncancel=event=>{ if (running) event.preventDefault(); };
+    $('calibrationNameForm').onsubmit=event=>{
+      event.preventDefault();
+      if (!running && !manualDirty) finish('save',{name:$('calibrationName').value});
+    };
+    $('discard').onclick=()=>finish('discard');
+    $('refreshChart').onclick=async()=>{
+      lock(true);
+      try { await renderRun(true); } finally { lock(false); }
+    };
+    $('deleteCalibration').onclick=async()=>{
+      if (!window.confirm('Apagar a calibração selecionada do histórico da estação?')) return;
+      lock(true);
+      try {
+        await api('/stations/'+select.value+'/calibrations/delete',{calibration:$('history').value});
+        await load();
+      } catch (exc) { $('reviewError').textContent=exc.message; }
+      finally { lock(false); }
+    };
+    $('history').onchange=()=>renderRun();
+    select.onchange=async()=>{
+      if (draft) {
+        const requested = select.value;
+        select.value = new URLSearchParams(location.search).get('station') || '';
+        if (!window.confirm('Descartar o resultado em avaliação e trocar de estação?')) return;
+        lock(true);
+        try {
+          await api('/operations/'+draft+'/discard',{});
+          select.value=requested;
+        } catch (exc) { $('reviewError').textContent=exc.message; return; }
+        finally { lock(false); }
+      }
+      await load();
+    };
+    await load();
+    const id=workspace.dataset.operation;
+    if (id) {
+      const job=await api('/operations/'+id).catch(()=>null);
+      if (!job || String(job.code)!==select.value || !['calibrate','manual-calibration'].includes(job.kind) || job.published ||
+          catalog.some(run=>run.id===job.result?.calibration)) return;
+      if (job.status==='running' || job.status==='completed') {
+        $('panel').hidden=true;
+        lock(true);
+        try {
+          if (job.kind==='calibrate') await trainReview(id);
+          else { await watch(id); await reviewManual(id,job.settings.calibration); }
+        }
+        catch (exc) { showHistory(); error(exc.message); }
+        finally { lock(false); }
+      }
+    }
+  }
   function calibrationInfo() {
     if (!$('cn-calibration-select')) { readiness(); return; }
     const selected = station?.calibrations.find(c => c.id === $('cn-calibration-select').value);
@@ -376,7 +793,7 @@
       $('cn-cal-end').value = data.series.rain.end.slice(0, 7);
     }
     if (!$('cn-calibration-select')) { readiness(); return; }
-    data.calibrations.forEach(c => $('cn-calibration-select').append(option(c.id, `${c.id}${c.compatible ? '' : ' · incompatível'}`, !c.compatible)));
+    data.calibrations.forEach(c => $('cn-calibration-select').append(option(c.id, calibrationLabel(c), !c.compatible)));
     const first = data.calibrations.find(c => c.id.endsWith('PlainNSE_alfa_livre.json') && c.compatible) || data.calibrations.find(c => c.compatible);
     if (first) $('cn-calibration-select').value = first.id;
     calibrationInfo();
@@ -442,6 +859,10 @@
     stationPage().catch(exc => error(exc.message));
     return;
   }
+  if (step === 'calibrar') {
+    calibrationPage().catch(exc => error(exc.message));
+    return;
+  }
   $('cn-station').addEventListener('change', () => loadStation().catch(exc => error(exc.message)));
   $('cn-calibration-select')?.addEventListener('change', () => {clearResults(); calibrationInfo();});
   for (const id of ['cn-cycle', 'cn-as-of']) $(id)?.addEventListener('change', () => {clearResults(); horizon();});
@@ -449,10 +870,6 @@
   $('cn-replace')?.addEventListener('change', readiness);
   for (const series of ['rain', 'discharge']) $(`cn-save-${series}`)?.addEventListener('click', () => operate('inputs', {series, start: $('cn-start').value + '-01', end: $('cn-end').value + '-01', replace: $('cn-replace').checked}));
   $('cn-run')?.addEventListener('click', () => operate('forecast', {calibration: $('cn-calibration-select').value, cycle: $('cn-cycle').value, as_of: $('cn-as-of').value, months: Number($('cn-months').value)}));
-  $('cn-calibrate')?.addEventListener('click', () => {
-    const bounds = Object.fromEntries([...document.querySelectorAll('#cn-bounds tr')].map(row => [row.dataset.param, [...row.querySelectorAll('input')].map(i => Number(i.value))]));
-    operate('calibrate', {name: $('cn-name').value, end: $('cn-cal-end').value + '-01', train_ratio: Number($('cn-ratio').value), objective: $('cn-objective').value, maxiter: Number($('cn-maxiter').value), seed: Number($('cn-seed').value), warmup_steps: Number($('cn-warmup').value), bounds});
-  });
   document.querySelectorAll('.cn-section-nav a').forEach(link => link.addEventListener('click', event => { if (busy) event.preventDefault(); }));
   async function initialize() {
     const job = workspace.dataset.operation ? await api(`/operations/${workspace.dataset.operation}`).catch(() => null) : null;

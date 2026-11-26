@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Calibração · CN3S</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f6f5;color:#193b40;font:16px/1.5 "Source Sans 3",system-ui,sans-serif}header{background:#163b40;color:white;padding:14px max(5vw,calc((100vw - 1100px)/2));display:flex;align-items:center;gap:16px}header strong{letter-spacing:.12em}header span{border-left:1px solid #789598;padding-left:16px}main{max-width:1140px;margin:auto;padding:32px 20px}h1,h2,h3,p{margin:0}h1{font-size:32px;letter-spacing:-.04em}h2{font-size:21px}h3{font-size:16px;margin:20px 0 8px}section,dialog{background:white;border:1px solid #cfddda;border-radius:12px;padding:22px}section{margin:16px 0}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}label{font-size:14px;font-weight:650;display:block}select,input,button{font:inherit;border:1px solid #a6bab7;border-radius:6px;padding:9px 12px;color:inherit;background:white}select,input{display:block;width:100%;margin-top:5px}button,summary{cursor:pointer;font-weight:650}button.primary{background:#115e63;color:white;border-color:#115e63}button:disabled{opacity:.5;cursor:default}button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #348e94;outline-offset:2px}.scroll{overflow:auto}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:14px}td,th{padding:10px 12px;text-align:left;border-bottom:1px solid #dce5e3;white-space:nowrap}th{background:#eef4f2}.hint,small{font-size:14px;color:#516d70}.hint{margin:8px 0}.status{padding:10px 14px;background:#eef5f2;border-left:3px solid #5e9488;margin:14px 0}dialog{width:min(720px,96vw);max-height:92vh;color:inherit}dialog::backdrop{background:#102d36a8}details{margin:12px 0}details .grid{margin:10px 0}.actions{justify-content:flex-end;margin-top:16px}.context{color:#49696d}.spacer{margin-top:18px}[hidden]{display:none!important}@media(max-width:600px){main{padding:18px 10px}section,dialog{padding:15px}.grid{grid-template-columns:1fr}h1{font-size:27px}}
+.tick{display:flex;align-items:center;gap:8px;margin:12px 0}.tick input{width:auto;margin:0}.bounds input{width:100%;min-width:65px}.bounds{table-layout:fixed}.bounds td,.bounds th{padding:6px}.error{color:#983514}
+dialog{width:min(1120px,96vw)}.columns{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:28px}.columns>div{min-width:0}.columns>div+div{border-left:1px solid #dce5e3;padding-left:24px}.bounds input{padding:5px 8px;margin:0}.bounds td{padding:4px 6px}.actions{position:sticky;bottom:-22px;background:white;border-top:1px solid #dce5e3;padding:12px 0}.columns details{margin:8px 0}@media(max-width:780px){.columns{grid-template-columns:minmax(0,1fr);gap:0}.columns>div+div{border-left:0;padding-left:0}.actions{bottom:-15px}}
+</style>
+<header><strong>SHC</strong><span>CN3S · Modelagem mensal</span></header>
+<main><h1>Calibração</h1><section><label>Estação<select id="station"><option value="">Selecione uma estação</option><option selected value="maraba">Marabá · 29050000</option><option value="val">Valparaíso · 13710001</option></select></label></section>
+<section id="panel"><div class="row"><h2>Calibrações salvas</h2><button id="create" class="primary">Nova calibração</button></div>
+<label class="spacer" id="historyLabel">Histórico mensal<select id="history"></select></label><p id="empty" class="hint"></p>
+<div id="results"><p class="hint" id="period"></p><h3>Parâmetros finais</h3><div class="scroll"><table><thead><tr id="head"></tr></thead><tbody><tr id="params"></tr></tbody></table></div>
+<h3>Desempenho</h3><div class="scroll"><table><thead><tr><th>Amostra</th><th>Função objetivo ↓</th><th>NSE ↑</th></tr></thead><tbody id="scores"></tbody></table></div></div></section>
+<small>Mockup com dados ilustrativos. As alterações duram até recarregar a página.</small></main>
+<dialog id="dialog" aria-labelledby="title"><form id="form"><h2 id="title">Nova calibração</h2><p class="context" id="context"></p>
+<div class="columns"><div><h3>Vazão diária · estatísticas salvas</h3><div class="scroll"><table><thead><tr><th>Fonte / código</th><th>Período</th><th>Anos efetivos</th><th>Falhas</th></tr></thead><tbody id="stats"></tbody></table></div><small>Resumo da etapa Estação · 24/11/2026</small>
+<h3>Período dos dados</h3><div class="grid"><label>Mês inicial<input required type="month" id="start" value="2010-01"></label><label>Mês final<input required type="month" id="end" value="2025-12"></label></div>
+<label class="spacer">Aquecimento (meses)<input required type="number" id="warm" min="1" max="24" value="3"></label><p class="hint" id="first" aria-live="polite"></p>
+<h3>Dados mensais disponíveis</h3><p class="hint" id="coverage"></p><p id="notice" class="status" role="status"></p><button type="button" id="prepare">Preparar dados faltantes</button>
+<div class="grid spacer"><label>Função objetivo<select id="objective"><option>PlainNSE</option><option>ExtremeFlowBlend</option></select></label><label>Relação Treino/Teste<select id="ratio" aria-describedby="splitHint"></select></label></div>
+<p class="hint" id="splitHint">Os primeiros meses entram no treino e os seguintes, no teste.</p></div><div><h3>Limites dos parâmetros</h3><table class="bounds"><thead><tr><th>Parâmetro</th><th>Mínimo</th><th>Máximo</th></tr></thead><tbody id="bounds"></tbody></table><p id="boundError" class="error" role="status"></p>
+<h3>Parada do otimizador</h3>
+<label class="tick"><input type="checkbox" id="converge">Treinar até convergência</label>
+<div class="grid"><label id="iterLabel">Máximo de gerações<input id="iter" required type="number" min="1" max="20" value="20"></label><label>Semente<input required type="number" min="0" value="42"></label></div>
+<div id="tolerances" hidden><div class="grid"><label>Tolerância relativa (tol)<input id="tol" required type="number" step="any" min="0" value="0.0001"></label><label>Tolerância absoluta (atol)<input id="atol" required type="number" step="any" min="0" value="0"></label></div>
+<p class="hint"><span id="objectiveHelp"></span> O SciPy compara os valores da função objetivo entre os candidatos. Quando ficam suficientemente próximos, ele encerra o treino.</p><details><summary>Como escolher as tolerâncias?</summary><p class="hint"><b>tol</b> define a parcela proporcional à média. Com média 0,20 e tol = 0,01 (1%), essa parcela vale 0,002. <b>atol</b> acrescenta uma margem fixa. Com atol = 0,001, o SciPy para quando o desvio padrão dos valores é de até 0,003. Tolerâncias menores exigem valores mais próximos.</p></details><p class="hint">Teto de 1.000 gerações.</p></div>
+</div></div>
+<div class="row actions"><button type="button" id="cancel">Cancelar</button><button id="run" class="primary">Calibrar e salvar</button></div></form></dialog>
+<script>
+const el = id => document.getElementById(id);
+for(let train=95;train>=10;train-=5){
+ el('ratio').add(new Option(train+'% / '+(100-train)+'%',String(train),train===90,train===90));
+}
+function explainObjective(){
+ el('objectiveHelp').textContent=el('objective').value==='PlainNSE'
+  ? 'No PlainNSE, o valor a minimizar é 1 − NSE. Um NSE de 0,80 dá 0,20.'
+  : 'O ExtremeFlowBlend combina os erros relativos quadráticos das vazões baixas, médias e altas. Valores menores indicam melhor ajuste.';
+}
+el('objective').onchange=explainObjective;
+const fields = ['r0 (mm)','cn_i','alfa','beta','k0','k1','k2','ACT (meses)'];
+const models = {
+ maraba:{rain:['2000-01','2025-12'],flow:['2000-01','2025-12'],stats:[['Hidro / 29050000','1975–2025','47,8','6,3%']],runs:[
+ {date:'24/11/2026 15:40',obj:'ExtremeFlowBlend',a:'2010-01',b:'2025-12',p:[118,12.4,.16,.003,1,.23,.28,1],m:[.164,.82,.236,.74]},
+ {date:'20/11/2026 09:15',obj:'PlainNSE',a:'2005-01',b:'2024-12',p:[132,11.8,.18,.004,.96,.25,.31,0],m:[.21,.79,.29,.71]}]},
+ val:{rain:['2000-01','2025-12'],flow:null,stats:[['Hidro / 13710001','1982–2025','38,6','12,3%']],runs:[]}
+};
+const data = () => models[el('station').value];
+const month = s => s.slice(5)+'/'+s.slice(0,4);
+const span = v => v ? v.map(month).join(' a ') : 'ausente';
+const number = n => n.toLocaleString('pt-BR',{maximumFractionDigits:5});
+function row(parent,values,tag='td'){
+ for(const v of values){const cell=document.createElement(tag);cell.textContent=v;parent.append(cell)}
+}
+function table(id,rows){
+ el(id).replaceChildren();
+ for(const values of rows){const tr=document.createElement('tr');row(tr,values);el(id).append(tr)}
+}
+const limits = [[0,1000],[1,130],[.01,1],[.0001,1],[.01,1],[.01,1],[.01,1],[0,5]];
+for(const [i,field] of fields.entries()){
+ const tr=el('bounds').insertRow();
+ tr.insertCell().textContent=field;
+ for(const [j,v] of limits[i].entries()){
+  const input=document.createElement('input');
+  input.type='number'; input.required=true; input.min='0'; input.step=i===7?'1':'any';
+  input.defaultValue=v; input.setAttribute('aria-label',(j?'Máximo ':'Mínimo ')+field);
+  tr.insertCell().append(input);
+ }
+}
+function checkBounds(){
+ const rows=Array.from(el('bounds').rows);
+ const invalid=rows.find(tr=>{
+  const [lo,hi]=tr.querySelectorAll('input');
+  return !lo.validity.valid || !hi.validity.valid || lo.valueAsNumber>=hi.valueAsNumber;
+ });
+ el('boundError').textContent=invalid ? invalid.cells[0].textContent+' · Informe limites não negativos com mínimo menor que máximo. ACT usa meses inteiros.' : '';
+ return !invalid;
+}
+function solverMode(){
+ const checked=el('converge').checked;
+ el('iterLabel').hidden=el('iter').disabled=checked;
+ el('tolerances').hidden=el('tol').disabled=el('atol').disabled=!checked;
+}
+row(el('head'),fields,'th');
+function showRun(){
+ const r=data()?.runs[el('history').selectedIndex];
+ el('results').hidden=!r;
+ if(!r)return;
+ el('period').textContent='Período dos dados · '+span([r.a,r.b])+'  ·  Horário de Brasília'+(r.split?' · Treino/Teste '+r.split:'')+(r.stop?' · '+r.stop:'');
+ el('params').replaceChildren();row(el('params'),r.p.map(number));
+ table('scores',[['Treino',number(r.m[0]),number(r.m[1])],['Teste',number(r.m[2]),number(r.m[3])]]);
+}
+function station(){
+ const d=data();el('panel').hidden=!d;if(!d)return;
+ el('history').replaceChildren(...d.runs.map(r=>new Option(r.date+' · '+r.obj)));
+ el('historyLabel').hidden=!d.runs.length;el('empty').textContent=d.runs.length?'':'Esta estação ainda não tem calibrações mensais salvas.';
+ showRun();
+}
+function need(){
+ const a=el('start').value,b=el('end').value,w=Number(el('warm').value);
+ const date=new Date(a+'-01T00:00:00Z');
+ if(!a||!b||a>b||!el('warm').validity.valid||isNaN(date)){
+  el('first').textContent='';return null;
+ }
+ date.setUTCMonth(date.getUTCMonth()+w);
+ const first=date.toISOString().slice(0,7);
+ el('first').textContent='Com ACT = 0, a primeira vazão simulada é de '+month(first)+'. Os '+w+' meses iniciais fornecem a chuva antecedente.';
+ if(first>b)return null;
+ return ['rain','flow'].map(key=>({key,start:a,end:b})).filter(x=>{
+ const v=data()[x.key];return !v||v[0]>x.start||v[1]<x.end});
+}
+const names={rain:'chuva MERGE',flow:'vazão SQL'};
+function availability(){
+ const d=data(),needs=need();
+ el('coverage').textContent='Chuva MERGE · '+span(d.rain)+' | Vazão observada · '+span(d.flow);
+ const enough=needs && !needs.length;
+ el('notice').textContent=!needs?'Confira o período. É preciso ter meses para avaliar após o aquecimento.':needs.length?'Preparar '+needs.map(x=>names[x.key]+' ('+span([x.start,x.end])+')').join(' e ')+'.':'Chuva e vazão disponíveis para calibrar com os dados salvos.';
+ el('prepare').hidden=!needs?.length;const boundsOK=checkBounds();el('run').disabled=!enough||!boundsOK;
+}
+el('station').onchange=station;el('history').onchange=showRun;
+el('create').onclick=()=>{el('form').reset();solverMode();explainObjective();el('context').textContent=el('station').selectedOptions[0].text;table('stats',data().stats);availability();el('dialog').showModal()};
+el('cancel').onclick=()=>el('dialog').close();
+for(const id of ['start','end','warm'])el(id).oninput=availability;
+el('converge').onchange=solverMode;
+el('bounds').oninput=availability;
+el('prepare').onclick=()=>{
+ for(const x of need()??[]){const v=data()[x.key];data()[x.key]=[v&&v[0]<x.start?v[0]:x.start,v&&v[1]>x.end?v[1]:x.end]}
+ availability();
+};
+el('form').onsubmit=event=>{
+ event.preventDefault();if(need()?.length!==0)return;
+ const obj=el('objective').value;
+ const example=[126,11,.17,.003,.98,.24,.29,1];
+ const fitted=Array.from(el('bounds').rows,(tr,i)=>{
+  const [lo,hi]=tr.querySelectorAll('input');
+  return Math.max(lo.valueAsNumber,Math.min(hi.valueAsNumber,example[i]));
+ });
+ const stop=el('converge').checked?'Exemplo de convergência (tol '+el('tol').value+', atol '+el('atol').value+')':'Exemplo de parada no limite de '+el('iter').value+' gerações';
+ data().runs.unshift({date:new Date().toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo',dateStyle:'short',timeStyle:'short'}),obj,a:el('start').value,b:el('end').value,p:fitted,split:el('ratio').selectedOptions[0].text,stop,m:obj==='PlainNSE'?[.2,.8,.3,.7]:[.18,.8,.22,.7]});
+ el('dialog').close();station();
+};
+station();
+</script></html>

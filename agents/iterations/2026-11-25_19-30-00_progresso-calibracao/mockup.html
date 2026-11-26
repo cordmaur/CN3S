@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calibração CN3S · SHC</title>
+<link rel="stylesheet" href="../../../web/static/shc.css">
+<script src="../../../web/static/vendor/plotly-4.1.1.min.js"></script>
+<script src="../../../web/static/vendor/plotly-locale-pt-br-3.1.0.js"></script>
+<style>
+main{max-width:1320px;margin:auto;padding:22px}.mast{background:white;border-bottom:1px solid var(--line);padding:12px max(22px,calc((100vw - 1276px)/2));display:flex;align-items:center;gap:12px}.mast strong{font-size:20px}
+h1{margin-bottom:12px}.cn3s-page .card{padding:16px 20px;margin-bottom:12px}.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.bar h2,.bar p,.bar select{margin:0}.pick{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.config{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:24px;margin-top:10px}fieldset{border:0;margin:0;padding:0;min-width:0}.bounds{border-left:1px solid var(--line);padding-left:24px}
+.fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 12px}.cn3s-page input:not([type=checkbox]),.cn3s-page select{padding:6px 9px;margin:3px 0 9px}.cn3s-page select{padding-right:30px}.cn3s-page th,.cn3s-page td{padding:4px 7px}.bounds table{table-layout:fixed}.bounds input:not([type=checkbox]){margin:0;padding:3px 7px}
+.cn3s-page details{margin:9px 0;padding-top:7px}.cn3s-page h3{margin:0 0 7px}.cn3s-page p{margin-bottom:8px}.scroll{overflow:auto}.status{padding:8px 12px;background:#eef5f8;border-left:3px solid var(--blue);margin:10px 0}.status progress{display:block;width:100%;height:12px;accent-color:var(--blue);margin-top:6px}.footer{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.error{color:#903323}.chart{width:100%;min-width:0}.saved{color:var(--green)}button{padding:7px 12px}
+@media(max-width:740px){main{padding:12px}.pick,.config{grid-template-columns:minmax(0,1fr);gap:10px}.bounds{border-left:0;border-top:1px solid var(--line);padding:10px 0 0}.fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<header class="mast"><div class="logo" aria-hidden="true">SHC</div><strong>Sistema Hidrológico da COVEC</strong></header>
+<main class="cn3s-page">
+<h1>Calibração CN3S</h1>
+<p class="muted">Protótipo interativo com dados e operações simulados.</p>
+<section class="card">
+  <div class="pick">
+    <label>Estação <select id="station"><option value="beruri">Beruri · 13990000</option><option value="maraba">Marabá · 29050000</option></select></label>
+    <label id="historyLabel">Calibrações salvas <select id="history"></select></label>
+  </div>
+  <div class="bar"><p id="savedStatus" class="saved" role="status"></p><button id="new">Nova calibração</button></div>
+
+</section>
+<section class="card" id="setup" hidden>
+  <h2>Nova calibração</h2>
+  <form id="form">
+    <fieldset id="settings" class="config">
+      <div>
+        <div class="fields">
+          <label>Mês inicial<input id="start" type="month" value="2014-01" required></label>
+          <label>Mês final<input id="end" type="month" required></label>
+          <label>Aquecimento (meses)<input id="warmup" type="number" min="1" max="24" value="3" required></label>
+          <label>Função objetivo<select id="objective"><option>PlainNSE</option><option>ExtremeFlowBlend</option></select></label>
+          <label>Relação Treino/Teste<select id="ratio"></select></label>
+        </div>
+        <p id="first" class="muted"></p>
+        <h3>Cobertura mensal</h3>
+        <div class="scroll"><table><tbody id="coverage"></tbody></table></div>
+        <details><summary>Estatísticas de vazão diária</summary>
+          <div class="scroll"><table><thead><tr><th>Fonte / código</th><th>Período</th><th>Anos efetivos</th><th>Falhas</th></tr></thead><tbody id="daily"></tbody></table></div>
+        </details>
+        <details><summary>Opções do otimizador</summary>
+          <label class="cn-check"><input type="checkbox" id="converge">Treinar até convergência</label>
+          <div class="fields">
+            <label id="maxLabel">Máximo de gerações<input id="maxiter" type="number" min="1" max="20" value="20" required></label>
+            <label>Semente<input id="seed" type="number" min="0" value="42" required></label>
+            <label id="tolLabel" hidden>Tolerância relativa<input id="tol" type="number" min="0" step="any" value="0.0001" required></label>
+            <label id="atolLabel" hidden>Tolerância absoluta<input id="atol" type="number" min="0" step="any" value="0" required></label>
+          </div>
+          <p id="help" class="muted" hidden>O SciPy compara os valores da função objetivo entre candidatos. A tolerância relativa define uma margem proporcional à média e a absoluta acrescenta uma margem fixa. Teto de 1.000 gerações.</p>
+        </details>
+      </div>
+      <div class="bounds">
+        <h3>Limites dos parâmetros</h3>
+        <table><thead><tr><th>Parâmetro</th><th>Mínimo</th><th>Máximo</th></tr></thead><tbody id="bounds"></tbody></table>
+      </div>
+    </fieldset>
+    <div id="prepStatus" class="status" hidden>
+      <div id="prepText" role="status"></div>
+      <progress id="prepProgress" aria-label="Fontes preparadas"></progress>
+    </div>
+    <div class="bar footer">
+      <p id="ready" role="status"></p>
+      <div class="bar"><button type="button" class="secondary" id="prepare">Preparar dados faltantes</button><button type="button" class="quiet" id="cancel">Cancelar</button><button id="train">Calibrar</button></div>
+    </div>
+  </form>
+</section>
+<section class="card" id="execution" hidden aria-labelledby="executionTitle">
+  <h2 id="executionTitle" tabindex="-1">Acompanhamento do treino</h2>
+  <div class="status"><p id="runStatus" role="status"></p><progress id="runProgress" aria-label="Gerações concluídas"></progress></div>
+  <div id="liveChart" class="chart" aria-label="Melhor função objetivo de treino por geração"></div>
+  <h3>Melhores parâmetros da geração</h3>
+  <div class="scroll"><table><thead><tr id="paramHeader"></tr></thead><tbody><tr id="paramRow"></tr></tbody></table></div>
+</section>
+<section class="card" id="review" hidden aria-labelledby="reviewTitle">
+  <h2 id="reviewTitle" tabindex="-1">Revisar calibração</h2>
+  <p id="reviewStatus" role="status"></p>
+  <div class="scroll"><table><thead><tr><th>Amostra</th><th>Função objetivo ↓</th><th>NSE ↑</th></tr></thead><tbody id="metrics"></tbody></table></div>
+  <details><summary>Parâmetros finais</summary><div class="scroll"><table><thead><tr id="reviewHeader"></tr></thead><tbody><tr id="reviewParams"></tr></tbody></table></div></details>
+  <div id="finalChart" class="chart" aria-label="Chuva mensal e vazão observada e simulada"></div>
+  <div class="bar footer"><button id="refresh" class="secondary" hidden>Atualizar dados</button><button id="delete" class="danger" hidden>Apagar calibração</button><button id="discard" class="secondary">Descartar resultado</button><button id="save">Salvar calibração</button></div>
+</section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const names = ['r0 (mm)', 'cn_i', 'alfa', 'beta', 'k0', 'k1', 'k2', 'ACT (meses)'];
+const limits = [[0,1000],[1,130],[.01,1],[.0001,1],[.01,1],[.01,1],[.01,1],[0,5]];
+const exampleObjectives = [.7944, .6962, .5826, .3866, .3866, .3866];
+const exampleParams = [
+  [104.494,56.514,.5793,.17075,.24078,.58524,.08388,3],
+  [159.105,27.371,.78485,.08254,.21976,.69415,.42934,3],
+  [180.509,29.610,.32438,.01098,.19238,.91158,.48147,3],
+  [207.023,36.855,.41380,.00614,.23785,.46234,.08892,3]
+];
+const previous = new Date();
+previous.setDate(1);
+previous.setMonth(previous.getMonth()-1);
+const monthKey = date => date.getFullYear() + '-' + String(date.getMonth()+1).padStart(2,'0');
+const previousMonth = monthKey(previous);
+const stations = {
+  beruri:{start:'2014-01', rain:null, flow:null, saved:[], daily:[
+    ['Hidro / 13990000','01/2024 a 04/2026','2,3','0%'],
+    ['Telemetria/RHN / 35261210','01/2014 a 11/2026','12,7','1,8%']
+  ]},
+  maraba:{start:'2000-01', rain:['2000-01',previousMonth], flow:['2000-01',previousMonth], saved:[
+    {name:'20/11/2026 09:15 · PlainNSE', result:{start:'2000-01',end:'2025-12',score:.22,test:.29,warmup:3,ratio:.9,objective:'PlainNSE',params:exampleParams[0]}}
+  ],daily:[['Hidro / 29050000','01/1975 a 12/2025','47,8','6,3%']]}
+};
+const sources = {rain:'Chuva MERGE', flow:'Vazão SQL'};
+const model = () => stations[$('station').value];
+const pause = ms => new Promise(resolve => setTimeout(resolve,ms));
+const display = value => value.toLocaleString('pt-BR',{maximumFractionDigits:4});
+const plotOptions = {responsive:true,locale:'pt-BR',displaylogo:false};
+let busy = false;
+let draft;
+function cells(row, values, tag='td') {
+  row.replaceChildren();
+  for (const value of values) {
+    const cell = document.createElement(tag);
+    cell.textContent = value;
+    row.append(cell);
+  }
+}
+function rows(id, values) {
+  $(id).replaceChildren();
+  for (const value of values) cells($(id).insertRow(),value);
+}
+for (let train=95;train>=10;train-=5) $('ratio').add(new Option(train+'% / '+(100-train)+'%',train,train===90));
+cells($('paramHeader'),names,'th');
+cells($('reviewHeader'),names,'th');
+limits.forEach((pair,index)=>{
+  const row=$('bounds').insertRow();
+  row.insertCell().textContent=names[index];
+  pair.forEach((value,side)=>{
+    const input=document.createElement('input');
+    input.type='number';input.min='0';input.required=true;input.step=index===7?'1':'any';
+    input.defaultValue=value;input.setAttribute('aria-label',(side?'Máximo ':'Mínimo ')+names[index]);
+    row.insertCell().append(input);
+  });
+});
+function missing() {
+  return Object.keys(sources).filter(key=>!model()[key] || model()[key][1]<$('end').value || $('start').value<model()[key][0]);
+}
+function update() {
+  const start=$('start').value,end=$('end').value;
+  const first=new Date(start+'-01T12:00:00');
+  first.setMonth(first.getMonth()+Number($('warmup').value));
+  const valid=Boolean(start && end && $('warmup').validity.valid && monthKey(first)<=end);
+  $('first').textContent=valid?'Primeiro mês simulado com ACT = 0 · '+monthKey(first):'';
+  const invalidBounds=Array.from($('bounds').rows).some(row=>{
+    const [low,high]=row.querySelectorAll('input');
+    return !low.validity.valid || !high.validity.valid || low.valueAsNumber>=high.valueAsNumber;
+  });
+  const needs=missing();
+  rows('coverage',Object.entries(sources).map(([key,label])=>[
+    label,model()[key]?model()[key].join(' a '):'Série mensal ausente'
+  ]));
+  $('ready').textContent=!valid?'Confira o período e o aquecimento.':invalidBounds?'Confira os mínimos e máximos.':needs.length?'Dados faltantes · '+needs.map(key=>sources[key]).join(' e '):'Dados disponíveis para calibrar.';
+  $('prepare').hidden=!needs.length;
+  $('prepare').disabled=busy||!valid;
+  $('train').disabled=busy||!valid||invalidBounds||Boolean(needs.length)||Boolean(draft);
+}
+function lock(value) {
+  busy=value;
+  $('settings').disabled=value;
+  $('station').disabled=value;
+  $('cancel').disabled=value;
+  update();
+}
+function history() {
+  const saved=model().saved;
+  $('history').replaceChildren(...saved.map((item,index)=>new Option(item.name,index)));
+  if (!saved.length) $('history').add(new Option('Nenhuma calibração salva',''));
+  $('history').disabled=!saved.length;
+  showSaved();
+}
+function showSaved() {
+  const selection=model().saved[$('history').value]?.result;
+  if (selection) showReview(selection,true);
+  else $('review').hidden=true;
+}
+function showReview(run,saved) {
+  $('save').hidden=$('discard').hidden=saved;
+  $('refresh').hidden=$('delete').hidden=!saved;
+  $('review').hidden=false;
+  $('reviewStatus').textContent=(saved?'Calibração salva':'Resultado em avaliação')+' · '+run.objective+' · '+run.start+' a '+run.end;
+  const nse=run.nse || [1-run.score,1-run.test];
+  rows('metrics',[
+    ['Treino',display(run.score),display(nse[0])],
+    ['Teste',display(run.test),display(nse[1])]
+  ]);
+  cells($('reviewParams'),run.params.map(display));
+  drawFinal(run);
+}
+function showHistory() {
+  draft=null;
+  $('setup').hidden=$('execution').hidden=true;
+  $('historyLabel').hidden=$('new').hidden=false;
+  history();
+}
+function solverMode() {
+  const checked=$('converge').checked;
+  $('maxLabel').hidden=$('maxiter').disabled=checked;
+  $('help').hidden=!checked;
+  for(const id of ['tol','atol']) $(id+'Label').hidden=$(id).disabled=!checked;
+}
+function reset() {
+  draft=null;
+  $('form').reset();
+  $('start').value=model().start;
+  $('end').value=previousMonth;
+  $('prepStatus').hidden=$('execution').hidden=$('review').hidden=true;
+  rows('daily',model().daily);
+  solverMode();
+  lock(false);
+}
+$('station').onchange=()=>{
+  if(draft && !confirm('Descartar o resultado em avaliação e trocar de estação?')){
+    $('station').value=draft.station;
+    return;
+  }
+  $('savedStatus').textContent='';
+  showHistory();
+};
+$('history').onchange=showSaved;
+$('new').onclick=()=>{
+  reset();
+  $('savedStatus').textContent='';
+  $('historyLabel').hidden=$('new').hidden=true;
+  $('setup').hidden=false;
+  $('start').focus();
+};
+$('cancel').onclick=()=>{
+  if(draft && !confirm('Descartar o resultado em avaliação?'))return;
+  showHistory();
+  $('new').focus();
+};
+$('form').oninput=update;
+$('converge').onchange=solverMode;
+$('prepare').onclick=async()=>{
+  const needs=missing();
+  const progress=$('prepProgress');
+  lock(true);$('prepStatus').hidden=false;
+  progress.max=needs.length;
+  progress.value=0;
+  for (const [i,key] of needs.entries()) {
+    $('prepText').textContent=(i+1)+' de '+needs.length+' · '+(key==='rain'?'Baixando chuva MERGE e calculando a média na bacia…':'Consultando e agregando vazão mensal no SQL…');
+    await pause(1150);
+    const [first,last]=model()[key] || [];
+    model()[key]=[[first,$('start').value].filter(Boolean).sort()[0],[last,$('end').value].filter(Boolean).sort().at(-1)];
+    progress.value=i+1;
+  }
+  $('prepText').textContent='Preparo concluído · '+needs.map(key=>sources[key]).join(' e ');
+  lock(false);
+};
+function drawFinal(run) {
+  const dates=[], rain=[], observed=[], simulated=[];
+  const cursor=new Date(run.start+'-01T12:00:00');
+  while(monthKey(cursor)<=run.end){
+    const i=dates.length;
+    const season=Math.cos((cursor.getMonth()-2)*Math.PI/6);
+    const base=4800+2300*Math.cos((cursor.getMonth()-4)*Math.PI/6);
+    dates.push(monthKey(cursor)+'-01');
+    rain.push(155+110*season+25*Math.sin(i*2.1));
+    observed.push(i%23===10?null:base+400*Math.sin(i*.57));
+    simulated.push(i<run.warmup?null:base*.95+520*Math.sin(i*.57-.5));
+    cursor.setMonth(cursor.getMonth()+1);
+  }
+  const cut=dates[Math.min(dates.length-1,run.warmup+Math.floor((dates.length-run.warmup)*run.ratio))];
+  Plotly.react('finalChart',[
+    {type:'bar',name:'Chuva MERGE',x:dates,y:rain,yaxis:'y2',marker:{color:'#6ca8ce'},hovertemplate:'%{y:.0f} mm/mês'},
+    {type:'scatter',mode:'lines',name:'Vazão observada',x:dates,y:observed,line:{color:'#164f74',width:2},hovertemplate:'%{y:.0f} m³/s'},
+    {type:'scatter',mode:'lines',name:'Vazão simulada',x:dates,y:simulated,line:{color:'#b9532e',width:2},hovertemplate:'%{y:.0f} m³/s'}
+  ],{
+    height:740,margin:{l:72,r:18,t:55,b:60},hovermode:'x unified',
+    xaxis:{type:'date',title:{text:'Mês'}},
+    yaxis:{domain:[0,.57],title:{text:'Vazão (m³/s)'},rangemode:'tozero'},
+    yaxis2:{domain:[.62,1],title:{text:'Chuva (mm/mês)'},autorange:'reversed'},
+    legend:{orientation:'h',y:1.09},separators:',.',
+    shapes:[{type:'line',xref:'x',yref:'paper',x0:cut,x1:cut,y0:0,y1:1,line:{color:'#667885',dash:'dash'}}],
+    annotations:[{xref:'x',yref:'paper',x:cut,y:.59,text:'Início do teste',showarrow:false,xanchor:'right',font:{size:11}}]
+  },plotOptions);
+}
+$('form').onsubmit=async event=>{
+  event.preventDefault();
+  if($('train').disabled)return;
+  lock(true);
+  $('save').disabled=$('discard').disabled=false;
+  $('review').hidden=true;
+  const run={
+    start:$('start').value,end:$('end').value,objective:$('objective').value,
+    ratio:Number($('ratio').value)/100,warmup:Number($('warmup').value),station:$('station').value
+  };
+  const convergence=$('converge').checked;
+  const total=convergence?6:Number($('maxiter').value);
+  $('execution').hidden=false;
+  $('executionTitle').focus();
+  $('runStatus').textContent='Inicializando a população…';
+  const progress=$('runProgress');
+  progress.removeAttribute('value');
+  $('paramRow').replaceChildren();
+  await Plotly.newPlot('liveChart',[{x:[],y:[],mode:'lines+markers',line:{color:'#145d83'}}],{
+    height:300,margin:{l:70,r:20,t:18,b:56},
+    xaxis:{title:{text:'Geração'},dtick:total<=20?1:undefined},yaxis:{title:{text:'Objetivo de treino'}},separators:',.'
+  },plotOptions);
+  const bounds=Array.from($('bounds').rows,row=>Array.from(row.querySelectorAll('input'),input=>input.valueAsNumber));
+  for(let i=0;i<total;i++){
+    await pause(i===0?440:330);
+    run.score=exampleObjectives[Math.min(i,exampleObjectives.length-1)];
+    run.params=exampleParams[Math.min(i,exampleParams.length-1)].map((v,j)=>Math.max(bounds[j][0],Math.min(bounds[j][1],v)));
+    await Plotly.extendTraces('liveChart',{x:[[i+1]],y:[[run.score]]},[0]);
+    cells($('paramRow'),run.params.map(display));
+    $('runStatus').textContent='Geração '+(i+1)+(convergence?'':' de '+total)+' · Melhor objetivo de treino '+display(run.score);
+    if(!convergence){progress.max=total;progress.value=i+1;}
+  }
+  if(convergence){progress.max=1;progress.value=1;}
+  $('runStatus').textContent=convergence?'Treino concluído por convergência · '+total+' gerações':'Treino concluído · Limite de '+total+' gerações atingido';
+  run.test=run.score+.11;
+  draft=run;
+  run.nse=run.objective==='PlainNSE'?[1-run.score,1-run.test]:[.67,.51];
+  showReview(run,false);
+  $('reviewTitle').focus();
+  lock(false);
+};
+$('save').onclick=()=>{
+  if(!draft)return;
+  model().saved.unshift({name:new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'})+' · '+draft.objective,result:draft});
+  showHistory();
+  $('savedStatus').textContent='Calibração salva';
+  $('history').focus();
+};
+$('discard').onclick=()=>{
+  showHistory();
+  $('new').focus();
+};
+$('refresh').onclick=()=>{
+  const saved=model().saved[$('history').selectedIndex]?.result;
+  if(!saved)return;
+  drawFinal(saved);
+  $('reviewStatus').textContent='Gráfico atualizado com os dados mensais desta demonstração.';
+};
+$('delete').onclick=()=>{
+  const index=$('history').selectedIndex;
+  const item=model().saved[index];
+  if(!item || !confirm('Apagar a calibração '+item.name+'?'))return;
+  model().saved.splice(index,1);
+  history();
+  $('savedStatus').textContent='Calibração apagada do histórico da demonstração';
+  (model().saved.length?$('history'):$('new')).focus();
+};
+showHistory();
+</script>
+</body>
+</html>

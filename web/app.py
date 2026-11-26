@@ -45,7 +45,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SECURE=os.environ.get("SHC_COOKIE_SECURE", "false").lower() == "true",
         SESSION_COOKIE_SAMESITE="Lax",
-        PERMANENT_SESSION_LIFETIME=timedelta(hours=1),
+        PERMANENT_SESSION_LIFETIME=timedelta(hours=float(os.getenv("SHC_SESSION_IDLE_HOURS", "8"))),
         SHC_DURATION_CURVES_DIR=Path(
             os.environ.get(
                 "SHC_DURATION_CURVES_DIR",
@@ -66,6 +66,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
     )
     app.config.update(config or {})
     Session(app)
+    app.extensions["shc_login_lock"] = Lock()
     app.extensions["shc_sql_cache"] = SimpleCache(threshold=512, default_timeout=0)
     app.extensions["shc_catalog_cache"] = SimpleCache(threshold=1, default_timeout=0)
     app.extensions["shc_station_locks"] = {}
@@ -99,14 +100,14 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
                 response.headers["Content-Encoding"] = "gzip"
             return response
         session.setdefault("csrf_token", secrets.token_urlsafe(32))
-        g.login = login.current_login()
+        g.login = (
+            {"status": "signed_out"}
+            if request.endpoint == "login.logout"
+            else login.current_login()
+        )
         public = {"login.index", "login.start", "login.status", "login.logout", "static", "entry"}
         if request.endpoint and request.endpoint not in public and g.login["status"] != "signed_in":
-            if request.path.startswith(("/shc/permanencia/", "/shc/cn3s/")):
-                return jsonify(
-                    error="Sua sessão expirou. Entre novamente.", login_required=True
-                ), 401
-            return redirect(url_for("login.index"))
+            return login.require_login()
         if request.method == "POST":
             token = request.headers.get("X-CSRF-Token", request.form.get("csrf_token", ""))
             if not secrets.compare_digest(token, session["csrf_token"]):

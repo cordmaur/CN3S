@@ -26,6 +26,22 @@ DataSanitization: TypeAlias = dict[SeriesType, dict[str, float]]
 DEFAULT_PERIOD = slice(None, None)
 
 
+def watershed_path(folder: Path) -> Path:
+    """
+    Locate the saved upstream basin in either station folder format.
+
+    Args:
+        folder: Prepared station directory.
+
+    Returns:
+        GeoParquet path, preferring the current filename when both exist.
+
+    """
+    current = folder / "upstream_watershed.parquet"
+    legacy = folder / "watershed.parquet"
+    return legacy if not current.exists() and legacy.is_file() else current
+
+
 class Station:
     """
     Aggregate a historical station and its associated telemetric stations.
@@ -88,7 +104,7 @@ class Station:
         station = cls.__new__(cls)
         station.station_dir = Path(station_dir)
         station.metadata_path = station.station_dir / "metadata.json"
-        station.upstream_watershed_path = station.station_dir / "upstream_watershed.parquet"
+        station.upstream_watershed_path = watershed_path(station.station_dir)
         with station.metadata_path.open(encoding="utf-8") as file:
             station.metadata = json.load(file)
         station.upstream_watershed = gpd.read_parquet(station.upstream_watershed_path)

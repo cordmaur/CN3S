@@ -1,4 +1,3 @@
-
 """Calibration optimizer for the CN3S rainfall-runoff model."""
 
 from __future__ import annotations
@@ -12,6 +11,8 @@ from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from plotly.graph_objs import Figure
 
     from cn3s.model import CN3S
@@ -103,6 +104,9 @@ class CN3SOptimizer:
         train_ratio: float = 0.7,
         objective: Objective | None = None,
         optimize_params: tuple[str, ...] | None = None,
+        *,
+        disjoint_split: bool = False,
+        on_generation: Callable[[int, float, dict[str, float]], bool | None] | None = None,
     ) -> None:
         """
         Initialise the optimiser and prepare train / test splits.
@@ -117,6 +121,9 @@ class CN3SOptimizer:
                 Must be in (0, 1). Defaults to 0.7 (70 / 30 split).
             objective: Objective instance to minimize, defaulting to NSETopBlend.
                 Wrap custom functions explicitly with Objective(fn).
+            disjoint_split: Split eligible months after warmup, assigning cutoff to test only.
+            on_generation: Callback receiving generation, best objective and parameters.
+                Return True to stop after that generation.
             optimize_params: Names of free parameters, in candidate-vector order.
                 Defaults to all names in model.params.bounds. Omitted parameters
                 retain their values at the start of each optimization run.
@@ -128,6 +135,9 @@ class CN3SOptimizer:
         if not 0 < train_ratio < 1:
             msg = f"train_ratio must be in (0, 1), got {train_ratio!r}"
             raise ValueError(msg)
+        self.disjoint_split = disjoint_split
+        self.on_generation = on_generation
+        self._stop_requested = False
         self.train_ratio = train_ratio
         self.objective = Objectives.NSETopBlend if objective is None else objective
 
@@ -143,6 +153,7 @@ class CN3SOptimizer:
             msg = "optimize_params must be nonempty and contain unique calibration parameter names."
             raise ValueError(msg)
 
+        self.step = 0
         self.model = model
         self.history = pd.DataFrame()
         self.result: OptimizeResult | None = None
@@ -172,7 +183,13 @@ class CN3SOptimizer:
             raise ValueError(msg)
 
         # Determine where is the TRAIN/TEST split index (based on the unshifted alignment)
+        if disjoint_split:
+            self.aligned = self.aligned.loc[prec.index[model.params.warmup_steps] :]
         split_idx = int(len(self.aligned) * self.train_ratio)
+        minimum_pairs = 2
+        if disjoint_split and min(split_idx, len(self.aligned) - split_idx) < minimum_pairs:
+            msg = "São necessários dois pares após o aquecimento em treino e em teste."
+            raise ValueError(msg)
         self.train_idx = split_idx  # first `split_idx` rows are train (for display)
 
         # Use a date-based cutoff so the split is stable regardless of ACT shift
@@ -245,9 +262,12 @@ class CN3SOptimizer:
             train: Whether to select the calibration rather than test period.
 
         Returns:
-            The requested chronological subset, using the existing inclusive cutoff.
+            The requested chronological subset, using the configured cutoff convention.
 
         """
+        if train and self.disjoint_split:
+            training: pd.DataFrame = df.loc[df.index < self._train_cutoff]
+            return training
         return df.loc[: self._train_cutoff] if train else df.loc[self._train_cutoff :]
 
     def _nse(self, df: pd.DataFrame, *, train: bool) -> float:
@@ -440,6 +460,9 @@ class CN3SOptimizer:
             intermediate_result: SciPy ``OptimizeResult`` carrying the current
                 best parameter vector in ``x`` and its objective value in ``fun``.
 
+        Raises:
+            StopIteration: When the caller requested that the solver stop.
+
         """
         params_vec = np.asarray(intermediate_result.x, dtype=np.float64)
         train_objective = float(intermediate_result.fun)
@@ -455,8 +478,12 @@ class CN3SOptimizer:
         )
 
         values = dict(zip(self.optimize_params, map(float, params_vec), strict=True))
+        if self.on_generation is not None:
+            self._stop_requested = bool(self.on_generation(self.step, train_objective, values))
         print(f"{self.step} - Train objective: {train_objective:.4f} - {values}")
         self.step += 1
+        if self._stop_requested:
+            raise StopIteration
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -745,6 +772,7 @@ class CN3SOptimizer:
                     raise ValueError(msg)
         self.history = pd.DataFrame()
         self.result = None
+        self._stop_requested = False
         self._final_params = None
         self._final_step = None
         self._run_metadata = {
@@ -792,8 +820,11 @@ class CN3SOptimizer:
             print("\nOptimization interrupted — best model so far is in `optim.model`.")
 
         else:
+            status = "completed" if self.result.success else "stopped"
+            if self._stop_requested:
+                status = "stopped_by_user"
             self._run_metadata.update(
-                status="completed" if self.result.success else "stopped",
+                status=status,
                 iterations=int(self.result.nit),
                 nfev=int(self.result.nfev),
                 message=str(self.result.message),

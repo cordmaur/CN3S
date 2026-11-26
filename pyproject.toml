@@ -25,6 +25,7 @@ web = [
     "sqlalchemy",
     "pyodbc",
     "azure-identity",
+    "msal>=1.23,<2",
     "pyarrow",
     "scipy",
     "scikit-learn",

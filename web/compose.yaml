@@ -3,6 +3,7 @@ name: cn3s-web
 services:
   web:
     environment:
+      SHC_SESSION_IDLE_HOURS: ${SHC_SESSION_IDLE_HOURS:-8}
       SHC_COOKIE_SECURE: ${SHC_COOKIE_SECURE:-false}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-}
     build:
@@ -14,9 +15,13 @@ services:
       # IIS proxies to 127.0.0.1:8000, so this uses 8000 and conflicts with the dev server.
       - "127.0.0.1:${SHC_HOST_PORT:-8000}:8000"
     volumes:
+      - shc-sessions:/tmp/shc-sessions
       - type: bind
         source: ${SHC_DURATION_CURVES_HOST_DIR:?Defina SHC_DURATION_CURVES_HOST_DIR com a pasta de curvas no host}
         target: /data/CN3S/Exceedance
         bind:
           create_host_path: false
     restart: unless-stopped
+
+volumes:
+  shc-sessions:

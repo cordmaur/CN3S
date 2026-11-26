@@ -1,28 +1,105 @@
-<section class="card"><h2>Dados mensais para calibração</h2><div id="cn-inputs"></div><a id="cn-input-download" hidden>Baixar dados mensais (CSV)</a><details><summary>Preparar dados mensais</summary>
-<p>Essas ações gravam arquivos compartilhados. A chuva e a vazão são obtidas separadamente. Calibrações existentes devem ser revistas se a bacia ou o início da série mudar.</p>
-<div class="cn-fields">
-<label>Primeiro mês<input id="cn-start" type="month" value="2000-01"></label><label>Último mês<input id="cn-end" type="month" value="2026-09"></label></div>
-<label class="cn-check"><input type="checkbox" id="cn-replace"> Substituir os arquivos indicados abaixo pelos dados calculados.</label>
-<div class="cn-actions"><button id="cn-save-rain" type="button">Salvar chuva mensal</button><button id="cn-save-discharge" type="button">Salvar vazão mensal</button></div>
-<p class="muted">Chuva/vazão: Monthly/rain.parquet ou Monthly/discharge.parquet. A vazão usa todos os dias disponíveis até o fim do último mês; o mês atual pode estar parcial.</p>
-</details>
+<section class="card" id="panel" hidden>
+  <div class="calibration-actions">
+    <label id="historyLabel">Calibrações salvas<select id="history"></select></label>
+    <button type="button" id="create">Nova calibração</button>
+  </div>
+  <p id="empty" role="status"></p>
 </section>
-<section class="card" id="cn-calibration">
-<h2>Calibrar Estação</h2>
-<label for="cn-calibration-select">Parâmetros salvos · somente frequência mensal</label><select id="cn-calibration-select"><option value="">Selecione uma estação primeiro</option></select>
-<div id="cn-calibration-info" class="cn-summary"></div>
-<details><summary>Parâmetros selecionados</summary><dl id="cn-parameter-values" class="cn-fields"></dl></details>
-<details><summary>Executar uma nova calibração</summary>
-<p>Usa os arquivos salvos e os parâmetros iniciais padrão do CN3S. A origem da chuva é preservada porque o armazenamento inicial depende desse histórico. O corte final define o período; a divisão treino/validação é cronológica.</p>
-<div class="cn-fields"><label>Nome novo<input id="cn-name" value="poc_monthly" pattern="[A-Za-z0-9_-]{1,64}"></label>
-<label>Último mês<input id="cn-cal-end" type="month" value="2026-09"></label>
-<label>Fração de treino<input id="cn-ratio" type="number" min="0.1" max="0.99" step="0.01" value="0.9"></label>
-<label>Objetivo<select id="cn-objective"><option>PlainNSE</option><option>ExtremeFlowBlend</option></select></label>
-<label>Máximo de iterações<input id="cn-maxiter" type="number" min="1" max="20" value="5"></label>
-<label>Semente<input id="cn-seed" type="number" min="0" value="42"></label>
-<label>Aquecimento (meses)<input id="cn-warmup" type="number" min="1" max="24" value="3"></label></div>
-<details><summary>Limites dos parâmetros</summary><div class="cn-table-wrap"><table><thead><tr><th>Parâmetro</th><th>Mínimo</th><th>Máximo</th></tr></thead><tbody id="cn-bounds">{% for name, limits in bounds.items() %}<tr data-param="{{ name }}"><th>{{ name }}{% if name == 'act' %} (meses inteiros){% elif name == 'r0' %} (mm){% endif %}</th><td><input aria-label="Mínimo {{ name }}" type="number" step="any" value="{{ limits[0] }}"></td><td><input aria-label="Máximo {{ name }}" type="number" step="any" value="{{ limits[1] }}"></td></tr>{% endfor %}</tbody></table></div></details>
-<button id="cn-calibrate" type="button" disabled>Calibrar e salvar novo arquivo</button>
-<p class="muted">Um trabalhador, população de 5 por parâmetro, sem polimento final. Uma execução que atinge o limite de iterações não comprova convergência nem habilidade preditiva.</p>
-</details>
+<section class="card" id="calibration-setup" hidden>
+  <h2>Nova calibração</h2>
+  <form id="calibration-form">
+    <fieldset id="settings" class="calibration-columns">
+      <div>
+        <div class="calibration-fields">
+          <label>Mês inicial<input required type="month" id="start" value="2000-01"></label>
+          <label>Mês final<input required type="month" id="end"></label>
+          <label>Aquecimento (meses)<input required type="number" id="warm" min="1" max="24" value="3"></label>
+          <label>Função objetivo<select id="objective"><option>PlainNSE</option><option>ExtremeFlowBlend</option></select></label>
+          <label>Relação Treino/Teste<select id="ratio">{% for percent in range(95, 9, -5) %}<option value="{{ percent }}"{% if percent == 90 %} selected{% endif %}>{{ percent }}% / {{ 100 - percent }}%</option>{% endfor %}</select></label>
+        </div>
+        <p id="first" class="muted" aria-live="polite"></p>
+        <h3>Cobertura mensal</h3>
+        <p class="muted" id="coverage"></p>
+        <a id="monthlyCsv" hidden>Baixar dados mensais (CSV)</a>
+        <details><summary>Estatísticas de vazão diária</summary>
+          <div class="calibration-table"><table><thead><tr><th>Fonte / código</th><th>Período</th><th>Anos efetivos</th><th>Falhas (%)</th></tr></thead><tbody id="stats"></tbody></table></div>
+          <small id="stamp"></small>
+        </details>
+        <details><summary>Opções do otimizador</summary>
+          <label class="cn-check"><input type="checkbox" id="converge">Treinar até convergência</label>
+          <div class="calibration-fields">
+            <label id="iterLabel">Máximo de gerações<input id="iter" required type="number" min="1" max="{{ max_iterations }}" value="{{ default_iterations }}"></label>
+            <label>Semente<input id="seed" required type="number" min="0" value="42"></label>
+          </div>
+          <div id="tolerances" hidden>
+            <div class="calibration-fields">
+              <label>Tolerância relativa (tol)<input id="tol" required type="number" step="any" min="0" value="0.0001"></label>
+              <label>Tolerância absoluta (atol)<input id="atol" required type="number" step="any" min="0" value="0"></label>
+            </div>
+            <p class="muted">O SciPy para quando os valores da função objetivo dos candidatos ficam suficientemente próximos. A tolerância relativa usa a média desses valores e a absoluta acrescenta uma margem fixa. Teto de 1.000 gerações.</p>
+          </div>
+        </details>
+      </div>
+      <div class="calibration-bounds">
+        <h3>Limites dos parâmetros</h3>
+        <table><thead><tr><th>Parâmetro</th><th>Mínimo</th><th>Máximo</th></tr></thead>
+          <tbody id="bounds">{% for key, pair in bounds.items() %}<tr data-param="{{ key }}"><th>{{ key }}{% if key == 'act' %} (meses){% elif key == 'r0' %} (mm){% endif %}</th>{% for limit in pair %}<td><input required aria-label="{{ 'Mínimo' if loop.first else 'Máximo' }} {{ key }}" type="number" min="0" step="{{ '1' if key == 'act' else 'any' }}" value="{{ limit }}"></td>{% endfor %}</tr>{% endfor %}</tbody>
+        </table>
+        <p id="boundError" role="status"></p>
+      </div>
+    </fieldset>
+    <div id="prepStatus" class="cn-notice" hidden><p id="prepText" role="status"></p><progress id="prepProgress" aria-label="Fontes preparadas"></progress></div>
+    <div class="calibration-actions">
+      <p id="notice" role="status"></p>
+      <button type="button" id="prepare" class="secondary" hidden>Preparar dados faltantes</button>
+      <button type="button" id="cancel" class="quiet">Cancelar</button>
+      <button id="run" disabled>Calibrar</button>
+    </div>
+    <p id="setupError" role="alert"></p>
+  </form>
 </section>
+<section class="card" id="execution" hidden>
+  <h2 id="executionTitle" tabindex="-1">Acompanhamento do treino</h2>
+  <div class="cn-notice"><p id="runStatus" role="status"></p><progress id="runProgress" aria-label="Gerações concluídas"></progress></div>
+  <button type="button" class="secondary" id="stopTraining" hidden>Parar treino</button>
+  <p id="stopStatus" role="status"></p>
+  <div id="liveChart" aria-label="Melhor objetivo de treino por geração"></div>
+  <h3>Melhores parâmetros da geração</h3>
+  <div class="calibration-table"><table><thead><tr class="calibration-parameter-head"></tr></thead><tbody><tr id="bestParams"></tr></tbody></table></div>
+</section>
+<section class="card" id="review" hidden>
+  <h2 id="reviewTitle" tabindex="-1">Revisar calibração</h2>
+  <p id="period"></p>
+  <div class="calibration-table"><table><thead><tr id="scoreHead"><th>Amostra</th><th>Função objetivo ↓</th><th>NSE ↑</th></tr></thead><tbody id="scores"></tbody></table></div>
+  <details><summary>Parâmetros finais</summary><div class="calibration-table"><table><thead><tr class="calibration-parameter-head"></tr></thead><tbody><tr id="params"></tr></tbody></table></div></details>
+  <form id="manualForm" hidden>
+    <h3>Ajuste manual</h3>
+    <p class="muted">Altere os parâmetros e recalcule com os dados e o corte de treino e teste da calibração original.</p>
+    <fieldset id="manualFields" class="calibration-fields">
+    {% for key in bounds %}<label>{{ key }}{% if key == 'act' %} (meses){% elif key == 'r0' %} (mm){% endif %}<input required type="number" data-manual-param="{{ key }}" min="0" step="{{ '1' if key == 'act' else 'any' }}"></label>{% endfor %}
+    </fieldset>
+    <button type="submit" id="recalculate">Recalcular</button>
+    <button type="button" id="cancelManual" class="quiet">Voltar à original</button>
+    <p id="manualStatus" role="status"></p>
+  </form>
+  <p id="chartStatus" role="status"></p><div id="finalChart"></div>
+  <p id="reviewError" role="alert"></p>
+  <div class="calibration-actions">
+    <button type="button" id="editManual">Ajuste manual</button>
+    <button type="button" id="refreshChart" class="secondary">Atualizar dados</button>
+    <button type="button" id="deleteCalibration" class="danger">Apagar calibração</button>
+    <button type="button" id="discard" class="secondary">Descartar resultado</button>
+    <button type="button" id="saveCalibration">Salvar calibração</button>
+  </div>
+</section>
+<dialog id="calibrationNameDialog" aria-labelledby="calibrationNameTitle">
+  <form id="calibrationNameForm">
+    <h2 id="calibrationNameTitle">Salvar como nova calibração</h2>
+    <label>Nome da calibração<input id="calibrationName" type="text" maxlength="{{ max_calibration_name }}" required autofocus></label>
+    <p id="saveError" role="alert"></p>
+    <div class="calibration-actions">
+      <button type="button" id="cancelSave" class="secondary">Cancelar</button>
+      <button id="confirmSave">Salvar</button>
+    </div>
+  </form>
+</dialog>
