@@ -8,9 +8,28 @@
       <figcaption><span class="cn-swatch"></span> Bacia <span id="cn-marker"><i></i> Estação</span> · Limites estaduais do IBGE, 2022</figcaption>
     </figure>
   </div>
+  <section class="card" id="cn-monthly">
+    <h2>Dados mensais</h2>
+    <p>Chuva e vazão utilizadas na calibração e na previsão.</p>
+    <p id="cn-monthly-coverage" class="muted" role="status"></p>
+    <details id="cn-monthly-editor">
+      <summary>Atualizar dados mensais</summary>
+      <form id="cn-monthly-form">
+        <fieldset id="cn-monthly-fields" class="calibration-fields">
+          <label>Fonte<select id="cn-monthly-source"><option value="rain">Chuva MERGE</option><option value="discharge">Vazão SQL</option><option value="both">Chuva e vazão</option></select></label>
+          <label>Mês inicial<input type="month" id="cn-monthly-start" required></label>
+          <label>Mês final<input type="month" id="cn-monthly-end" required></label>
+          <button type="submit">Atualizar dados mensais</button>
+        </fieldset>
+        <p>Os meses do intervalo serão atualizados; os demais serão preservados. As calibrações salvas mantêm seus parâmetros e métricas originais.</p>
+        <p id="cn-monthly-status" role="status" aria-live="polite"></p>
+        <progress id="cn-monthly-progress" aria-label="Atualizando dados mensais" hidden></progress>
+      </form>
+    </details>
+  </section>
   <section class="card">
     <h2>Séries hidrológicas</h2><p class="muted" id="cn-status" role="status"></p>
-    <button type="button" id="cn-refresh">Atualizar estatísticas</button>
+    <button type="button" id="cn-refresh">Atualizar estatísticas de cota e vazão</button>
     <progress id="cn-series-progress" aria-label="Atualizando séries hidrológicas" hidden></progress>
     <div class="cn-actions" aria-label="Variável hidrológica">
       <button type="button" data-series="cota" aria-pressed="true">Cota (cm)</button>

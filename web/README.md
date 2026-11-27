@@ -344,7 +344,13 @@ Para a primeira demonstração, clique em **Carregar exemplo de Marabá**:
 
 A página inspeciona bacia, áreas, cobertura e falhas das séries; permite salvar
 chuva e vazão separadamente, preparar uma estação e salvar uma nova calibração
-mensal. A confirmação de substituição indica quais arquivos serão escritos.
+mensal. Na aba **Estação → Dados mensais → Atualizar dados mensais**, escolha
+chuva MERGE, vazão SQL ou ambas e o intervalo. Os meses fora desse intervalo
+são preservados; parâmetros e métricas das calibrações salvas não são alterados.
+**Atualizar estatísticas de cota e vazão** atualiza apenas o resumo das séries diárias.
+Em **Calibrar Estação**, **Preparar dados faltantes na aba Estação** abre esse mesmo
+formulário com as fontes e o período da calibração. Em **Previsão**, quando falta
+chuva, **Atualizar chuva na aba Estação** preenche o intervalo necessário para o ciclo.
 Use uma **cópia de trabalho das estações** para experimentar essas ações.
 
 Calibrações novas ficam em `stations/<código>/Monthly/optim/<nome>.json` e nunca

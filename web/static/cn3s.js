@@ -34,11 +34,87 @@
     });
     wrapper.append(table); parent.append(wrapper);
   }
+  function monthlyLink(code, source, start, end) {
+    const query = new URLSearchParams({station: code, monthly: source, start, end});
+    return root + '/estacao?' + query + '#cn-monthly';
+  }
   async function stationPage() {
     const select = $('cn-station'), dialog = $('cn-dialog');
     const wait = () => new Promise(resolve => setTimeout(resolve, 1100));
-    let current = null, variable = 'cota', creating = false, mapKey = '';
+    let current = null, variable = 'cota', creating = false, mapKey = '', monthlyBusy = false;
+    const monthlyQuery = new URLSearchParams(location.search);
     const refreshes = new Map();
+
+    async function monthlyCoverage(initial = false) {
+      const code = select.value, version = selection;
+      const data = await api('/stations/' + code + '?view=availability');
+      if (version !== selection) return;
+      const monthlySeries = data.series;
+      $('cn-monthly-coverage').textContent = ['rain', 'discharge'].map(key => {
+        const row = monthlySeries[key];
+        return (key === 'rain' ? 'Chuva MERGE' : 'Vazão') + ': ' +
+          (row?.start ? row.start.slice(0, 7) + ' a ' + row.end.slice(0, 7) +
+            (row.missing ? ' · ' + row.missing + ' valores ausentes' : '') : 'ainda não preparada');
+      }).join(' | ');
+      if (initial) {
+        const parts = new Intl.DateTimeFormat('sv-SE', {timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit'}).format(new Date()).split('-').map(Number);
+        const last = new Date(Date.UTC(parts[0], parts[1] - 2, 1)).toISOString().slice(0, 7);
+        const linked = monthlyQuery.get('station') === code && monthlyQuery.has('monthly');
+        const requestedSource = monthlyQuery.get('monthly');
+        const source = linked && ['rain', 'discharge', 'both'].includes(requestedSource) ? requestedSource : 'rain';
+        $('cn-monthly-source').value = source;
+        const row = monthlySeries[source === 'both' ? 'rain' : source];
+        const next = row?.end ? new Date(row.end + 'T00:00:00Z') : null;
+        if (next) next.setUTCMonth(next.getUTCMonth() + 1);
+        const first = next ? [next.toISOString().slice(0, 7), last].sort()[0] : '2000-01';
+        $('cn-monthly-start').value = linked && monthlyQuery.get('start') ? monthlyQuery.get('start') : first;
+        $('cn-monthly-end').value = linked && monthlyQuery.get('end') ? monthlyQuery.get('end') : last;
+        $('cn-monthly-editor').open = linked;
+      }
+    }
+
+    function monthlyLock(value) {
+      monthlyBusy = value;
+      $('cn-monthly-fields').disabled = value;
+      select.disabled = value;
+      $('cn-add').disabled = value;
+      $('cn-refresh').disabled = value;
+      document.querySelectorAll('.cn-section-nav a').forEach(link => {
+        if (value) link.setAttribute('aria-disabled', 'true');
+        else link.removeAttribute('aria-disabled');
+      });
+      $('cn-monthly-progress').hidden = !value;
+    }
+
+    async function updateMonthly(existingId, settings) {
+      const code = select.value;
+      const source = settings?.series || $('cn-monthly-source').value;
+      const start = settings?.start || $('cn-monthly-start').value + '-01';
+      const end = settings?.end || $('cn-monthly-end').value + '-01';
+      $('cn-monthly-source').value = source;
+      $('cn-monthly-start').value = start.slice(0, 7);
+      $('cn-monthly-end').value = end.slice(0, 7);
+      if (start > end) {
+        $('cn-monthly-status').textContent = 'O mês inicial deve ser anterior ou igual ao mês final.';
+        return;
+      }
+      monthlyLock(true);
+      $('cn-monthly-editor').open = true;
+      try {
+        const sources = source === 'both' ? ['rain', 'discharge'] : [source];
+        for (const key of sources) {
+          const label = key === 'rain' ? 'Chuva MERGE' : 'Vazão SQL';
+          $('cn-monthly-status').textContent = label + ' · Iniciando atualização…';
+          const id = existingId || (await api('/stations/' + code + '/inputs', {series: key, start, end, replace: true})).operation_id;
+          await watch(id, job => { $('cn-monthly-status').textContent = label + ' · ' + job.phase; });
+          await monthlyCoverage();
+        }
+        $('cn-monthly-status').textContent = 'Dados mensais atualizados. Você pode seguir para Calibrar Estação ou Previsão.';
+      } catch (exc) {
+        $('cn-monthly-status').textContent = 'Atualização interrompida. ' + exc.message;
+        await monthlyCoverage().catch(() => {});
+      } finally { monthlyLock(false); }
+    }
 
     function renderSeries() {
       const parent = $('cn-stats'), overview = current?.overview;
@@ -187,7 +263,7 @@
       } finally {
         if (version === selection) {
           $('cn-series-progress').hidden = true;
-          $('cn-refresh').disabled = false;
+          $('cn-refresh').disabled = monthlyBusy;
         }
       }
     }
@@ -195,7 +271,7 @@
     async function load(existingId) {
       const code = select.value, version = ++selection;
       const pending = refreshes.get(code);
-      $('cn-series-progress').hidden = true; $('cn-refresh').disabled = false;
+      $('cn-series-progress').hidden = true; $('cn-refresh').disabled = monthlyBusy;
       $('cn-inventory').open = false;
       current = null; mapKey = ''; $('cn-details').hidden = true; error();
       $('cn-station-info').textContent = code ? 'Carregando ficha…' : 'Selecione uma estação para visualizar os dados.';
@@ -205,6 +281,9 @@
         const data = await api('/stations/' + code + '?view=station');
         if (version !== selection) return;
         renderFicha(data); status();
+        $('cn-monthly-status').textContent = '';
+        $('cn-monthly-coverage').textContent = 'Carregando cobertura mensal…';
+        await monthlyCoverage(true);
         if (existingId || pending) await updateStats(existingId, pending);
       } catch (exc) {
         if (version === selection) $('cn-station-info').textContent = exc.message;
@@ -242,6 +321,7 @@
 
     select.onchange = () => load();
     $('cn-refresh').onclick = () => updateStats();
+    $('cn-monthly-form').onsubmit = event => { event.preventDefault(); updateMonthly(); };
     document.querySelectorAll('[data-series]').forEach(button => {
       button.onclick = () => { variable = button.dataset.series; renderSeries(); };
     });
@@ -265,6 +345,9 @@
     } else {
       const resume = job?.status === 'running' && job.kind === 'overview' && String(job.code) === select.value;
       await load(resume ? id : null);
+      if (job?.status === 'running' && job.kind === 'inputs' && String(job.code) === select.value) {
+        await updateMonthly(id, job.settings);
+      }
     }
   }
   function calibrationName(run) {
@@ -408,9 +491,9 @@
       $('notice').textContent=!valid?'Confira o período e o aquecimento.':needs.length?'Preparar '+needs.map(k=>k==='rain'?'chuva MERGE':'vazão SQL').join(' e ')+'.':
         pairs+' meses com vazão após o aquecimento (ACT = 0). '+(enough?'':'Aumente o intervalo ou ajuste a relação treino/teste.');
       if (b===new Date().toISOString().slice(0,7)) $('notice').textContent+=' O mês atual pode estar parcial.';
-      $('prepare').hidden=!needs.length;
       const boundsOK=checkBounds();
-      $('prepare').disabled=running || !valid || Boolean(draft);
+      if (valid && needs.length) $('prepare').href=monthlyLink(select.value, needs.length===2?'both':needs[0], a, b);
+      $('prepare').hidden=running || !valid || !needs.length || Boolean(draft);
       $('run').disabled=running || !valid || !!needs.length || !enough || !boundsOK || Boolean(draft);
       return needs;
     }
@@ -503,54 +586,31 @@
       await drawReview('/operations/'+id+'/download/calibration-chart.json?inline=1');
       $('reviewTitle').focus();
     }
-    async function execute(prepare) {
+    async function execute() {
       const code=select.value, start=$('start').value+'-01', end=$('end').value+'-01';
-      const needs=availability();
-      if (prepare && needs.some(k=>series[k]) && !window.confirm('Atualizar os arquivos mensais compartilhados de '+start+' a '+end+'? Os meses fora do intervalo serão preservados.')) return;
+      if (availability().length) return;
       lock(true); $('setupError').textContent='';
       try {
-        if (prepare) {
-          $('prepStatus').hidden=false;
-          $('prepProgress').max=needs.length;
-          $('prepProgress').value=0;
-          for (const [index,key] of needs.entries()) {
-            const prefix=(index+1)+' de '+needs.length+' · '+(key==='rain'?'Chuva MERGE':'Vazão SQL');
-            $('prepText').textContent=prefix;
-            const job=await api('/stations/'+code+'/inputs',{series:key,start,end,replace:true});
-            await watch(job.operation_id, state=>{$('prepText').textContent=prefix+' · '+state.phase;});
-            $('prepProgress').value=index+1;
-          }
-          $('prepText').textContent='Preparo concluído.';
-          await coverage(false);
-        } else {
-          const bounds=Object.fromEntries(Array.from($('bounds').rows,tr=>[tr.dataset.param,Array.from(tr.querySelectorAll('input'),i=>i.valueAsNumber)]));
-          const payload={start,end,bounds,objective:$('objective').value,train_ratio:Number($('ratio').value)/100,
-            seed:$('seed').valueAsNumber,warmup_steps:$('warm').valueAsNumber,until_convergence:$('converge').checked,
-            maxiter:$('iter').valueAsNumber,tol:$('converge').checked?$('tol').valueAsNumber:0.0001,atol:$('converge').checked?$('atol').valueAsNumber:0};
-          $('execution').hidden=false;
-          $('runStatus').textContent='Iniciando calibração…';
-          const job=await api('/stations/'+code+'/calibrate',payload);
-          await trainReview(job.operation_id);
-        }
+        const bounds=Object.fromEntries(Array.from($('bounds').rows,tr=>[tr.dataset.param,Array.from(tr.querySelectorAll('input'),i=>i.valueAsNumber)]));
+        const payload={start,end,bounds,objective:$('objective').value,train_ratio:Number($('ratio').value)/100,
+          seed:$('seed').valueAsNumber,warmup_steps:$('warm').valueAsNumber,until_convergence:$('converge').checked,
+          maxiter:$('iter').valueAsNumber,tol:$('converge').checked?$('tol').valueAsNumber:0.0001,atol:$('converge').checked?$('atol').valueAsNumber:0};
+        $('execution').hidden=false;
+        $('runStatus').textContent='Iniciando calibração…';
+        const job=await api('/stations/'+code+'/calibrate',payload);
+        await trainReview(job.operation_id);
       } catch (exc) {
-        if (prepare) {
-          $('prepText').textContent += ' · Preparo interrompido.';
-          await coverage(false).catch(()=>{});
-        } else {
-          $('runStatus').textContent = exc.message;
-          $('runProgress').hidden = true;
-        }
+        $('runStatus').textContent = exc.message;
+        $('runProgress').hidden = true;
         $('setupError').textContent=exc.message;
-      } finally {
-        lock(false);
-      }
+      } finally { lock(false); }
     }
     $('create').onclick=async()=>{
       form.reset(); solverMode(); $('setupError').textContent='';
-      $('panel').hidden=$('prepStatus').hidden=$('execution').hidden=true;
+      $('panel').hidden=$('execution').hidden=true;
       $('calibration-setup').hidden=false;
       review(null,true);
-      $('stamp').textContent=overview?.updated_at?'Resumo de '+overview.updated_at:'Resumo ausente. Atualize as estatísticas na etapa Estação.';
+      $('stamp').textContent=overview?.updated_at?'Resumo de '+overview.updated_at:'Resumo ausente. Atualize as estatísticas de cota e vazão na aba Estação.';
       $('stats').replaceChildren();
       for(const [i,row] of (overview?.data||[]).entries()){
         const field=(g,k)=>row[overview.columns.findIndex(([group,metric])=>group===g && (!k||metric===k))];
@@ -623,8 +683,7 @@
     $('cancelManual').onclick=()=>{ if (draft) finish('discard'); else load(manualParent?.id); };
     $('cancel').onclick=async()=>{ if (draft) await finish('discard'); else await load(); };
     form.oninput=availability; $('converge').onchange=solverMode;
-    $('prepare').onclick=()=>execute(true);
-    form.onsubmit=e=>{e.preventDefault();$('runProgress').hidden=false;execute(false);};
+    form.onsubmit=e=>{e.preventDefault();$('runProgress').hidden=false;execute();};
     $('saveCalibration').onclick=()=>{
       $('saveError').textContent='';
       $('calibrationName').value='';
@@ -686,6 +745,9 @@
   function rememberStation(code) {
     sessionStorage.setItem('cn3s-station', code);
     const page = new URL(location.href);
+    if (page.searchParams.get('station') !== code) {
+      for (const key of ['monthly', 'start', 'end']) page.searchParams.delete(key);
+    }
     if (code) page.searchParams.set('station', code);
     else page.searchParams.delete('station');
     history.replaceState(history.state, '', page);
@@ -715,6 +777,14 @@
 
     function readiness() {
       const lead = cycle()?.months[0];
+      const required = lead ? nextMonth(lead, -1).slice(0, 7) : '';
+      const rain = station?.series.rain;
+      const needsRain = Boolean(station && required && (!rain?.end || rain.end.slice(0, 7) < required || rain.missing));
+      $('cn-update-rain-wrap').hidden = busy || !needsRain;
+      if (needsRain) {
+        const first = rain?.end && rain.end.slice(0, 7) < required ? nextMonth(rain.end, 1).slice(0, 7) : rain?.start?.slice(0, 7) || '2000-01';
+        $('cn-update-rain').href = monthlyLink(stationSelect.value, 'rain', first, required);
+      }
       calibrationSelect.disabled = busy || !compatible().length;
       cycleSelect.disabled = busy || !cycles.some(item => item.ready);
       monthSelect.disabled = busy || !monthSelect.options.length;
