@@ -307,10 +307,11 @@ a operação; o navegador recebe uma mensagem para tentar novamente.
 - `app.py`: configuração, proteção das rotas e página inicial.
 - `login.py`: autenticação por dispositivo e sessão.
 - `permanencia.py`: catálogo, estatísticas, curvas e persistência dos limites.
+- `cn3s.py`: dados de estação, calibração e previsão mensal do CN3S.
 - `templates/` e `static/`: layout, estilos e interações do navegador.
 
-Chuvas e CN3S aparecem como módulos futuros. O processamento científico continua
-em `src/hydro`; não é duplicado no JavaScript.
+O processamento científico é realizado nos módulos de `src/cn3s` e `src/hydro`;
+a interface reutiliza essas rotinas em vez de duplicá-las no JavaScript.
 
 ```bash
 docker compose -f web/compose.yaml logs --tail 100
@@ -379,7 +380,9 @@ chuva histórica até outubro. Meses ausentes não são preenchidos.
 
 As figuras preservam as convenções dos notebooks: cenário de chuva média e
 cenário da mediana das chuvas corrigidas, ACT aplicado uma única vez, séries
-mensais em mm/mês e vazões em m³/s. O ajuste visual à observação fica desligado.
+mensais em mm/mês e vazões em m³/s. A ancoragem visual à observação inicia
+desligada e pode ser ativada quando há vazões observada e simulada no mês de
+referência; o deslocamento constante altera o gráfico, não os CSVs numéricos.
 P10–P90 representa variabilidade histórica; não é intervalo de confiança de
 previsão. A referência não congela fontes online e as observações atuais podem
 ser parciais ou estar em cache. Uma falha na comparação SQL não apaga as vazões
@@ -441,8 +444,9 @@ Mantenha **um worker Gunicorn**: o módulo serializa operações CN3S com um loc
 no processo, incluindo leituras NetCDF que não podem sobrepor uma inferência.
 As requisições HTTP só iniciam trabalhos e consultam progresso. Reiniciar o
 worker (inclusive com `--reload`) interrompe operações; a interface informa a
-interrupção em vez de tentar retomá-las. Não há fila durável, cancelamento ou
-agendamento automático nesta prova de conceito. Operações nos arquivos por
+interrupção em vez de tentar retomá-las. Não há fila durável nem agendamento
+automático nesta prova de conceito. A parada cooperativa da calibração ocorre ao fim da geração em andamento; não é um
+cancelamento geral de todas as operações. Operações nos arquivos por
 notebooks externos não participam desse lock; evite editar a mesma cópia de
 trabalho simultaneamente.
 

@@ -7,21 +7,23 @@ river basins. This repository implements the model as an installable Python pack
 
 ## Repository Structure
 ```
-.devcontainer/    # Dev container configuration (Docker)
-.github/          # GitHub workflows and Copilot instructions
-.vscode/          # Editor settings and recommended extensions
-nbs/              # Jupyter notebooks for exploration and testing
-src/
-  cn3s/
-    __init__.py   # Re-exports CN3S and CN3SParams from model
-    model.py      # Model implementation: CN3SParams dataclass + CN3S class
-pyproject.toml    # Build config; install with: pip install -e .
+src/cn3s/        # Model, parameters, calibration, objectives, and metrics
+src/hydro/       # Stations, rainfall, forecasts, inference, and related analyses
+src/hydrography/ # Hydrography and watershed processing
+src/utils/       # Shared utilities and data connectors
+web/             # Flask application, templates, and browser assets
+nbs/             # Jupyter research workflows
+agents/iterations/ # Plans and session records
+pyproject.toml   # Package metadata, dependencies, Ruff and mypy configuration
 ```
+The code and `pyproject.toml` are the authoritative sources for current interfaces
+and package requirements. Inspect relevant implementation and callers before changes.
 
 ## Package Conventions
 
 ### Language & Style
-- Python ≥ 3.11
+- Python support is declared in `pyproject.toml` (currently ≥ 3.10); do not raise
+  the minimum version without an explicit decision.
 - Type annotations on **all** function signatures (`from __future__ import annotations`)
 - `ruff` for linting and formatting (line length 100, enforced via `.vscode/settings.json`)
 - Before finishing an iteration, run `ruff format --check` and the full `ruff check`
@@ -32,25 +34,24 @@ pyproject.toml    # Build config; install with: pip install -e .
   variable before raising, avoid raising inside a `try` just to catch the exception in
   that same block, use explicit `strict=` for `zip`, and avoid accessing private members.
   Use narrowly scoped, explained `noqa` exceptions only for justified existing APIs.
-  Respect the project's configured ignores, including `TRY003` (built-in exceptions
-  remain appropriate for simple code) and `COM812` (conflicts with `ruff format`).
+  Respect the project's configured ignores, including `TRY003` and `COM812`.
 - `mypy` for static type checking in strict mode
-- Google-style docstrings with `Args:` and `Returns:` sections
+- Google-style docstrings with `Args:` and `Returns:` sections where applicable.
 - Every method, including properties and special methods, must have a Google-style
   docstring. Document arguments and return values where applicable, with units and
   scientific assumptions when relevant. Keep multiline docstring formatting consistent.
-- Code must include concise comments explaining scientific processing steps,
-  methodological decisions, and non-obvious behavior. Explain purpose and assumptions;
-  avoid comments that merely restate Python syntax.
+- Include concise comments explaining scientific processing, methodological decisions,
+  and non-obvious behavior rather than restating Python syntax.
 
 ### Model Implementation (`src/cn3s/`)
-- All model code lives in `model.py`; `__init__.py` only re-exports `CN3S` and `CN3SParams`
-- `CN3SParams` is a `@dataclass` in `model.py` holding all basin descriptors and calibration parameters
-- `CN3S` is a pure-computation class in `model.py` that takes `CN3SParams` in `__init__`; each method represents one equation from the original paper
-- Method naming follows the paper notation: `vj`, `cnv`, `s`, `q_up`, `r1`, `q_low`, `r`, `q_calc_mm`, `q_calc_m3s`
-- All outputs are `float`; numpy arrays only appear as input to `vj` (past precipitation)
-- No global state — every time step receives explicit inputs
-- Never add new classes or functions directly to `__init__.py`; always implement in `model.py` (or a new dedicated module) and re-export from `__init__.py`
+- `params.py` defines `CN3SParams`; `model.py` defines `CN3S` and its model equations.
+  `optim.py`, `objectives.py`, and `metrics.py` support calibration and evaluation.
+- `__init__.py` re-exports the public model, parameter, optimizer, and objective APIs.
+  Implement new functionality in an appropriate module, not directly in `__init__.py`.
+- Preserve the existing `CN3S` and `CN3SParams` design. `CN3S` retains results and
+  state during runs; inspect `step`, `run`, and `reset` when changing that behavior.
+- Model equation methods follow the paper's notation. Preserve units, time-step and
+  antecedent-precipitation conventions when modifying calculations.
 
 ### Notebooks (`nbs/`)
 - Notebooks are numbered and prefixed: `01-`, `02-`, etc.
@@ -63,7 +64,7 @@ pyproject.toml    # Build config; install with: pip install -e .
 - Image: `cordmaur/planetary:v5`
 - Extensions installed automatically: `charliermarsh.ruff`, `ms-python.mypy-type-checker`, `ms-toolsai.jupyter`
 - After container creation, the package is installed in editable mode automatically via `postCreateCommand`
-- Data mounts are configured via the `CN3S_DATA_FOLDER` environment variable on the host
+- Data mounts are configured in `.devcontainer/devcontainer.json`; inspect the current host path before use.
 
 ## Build & Install
 ```bash
@@ -253,6 +254,9 @@ Do not automatically create:
 - exhaustive edge-case tests
 
 For numerical and scientific changes, prefer a small representative sanity check when useful.
+When a calculation is particularly important and likely to change again, a small,
+self-contained reference calculation with expected values and assumptions may be
+preserved if it is useful; do not introduce a test framework for this purpose.
 
 Correctness is important; maintaining production-style test infrastructure is not a default goal of this repository.
 
@@ -356,5 +360,12 @@ During discussion of the same iteration, overwrite its existing plan.md in place
 Do not version plans: do not add version numbers to filenames, directory names,
 or plan titles, and do not keep revision copies or create a new timestamped
 folder for each discussion update. Create a new folder only for a distinct work
-iteration. Do not place plan.md at the repository root. Include proposed
-method-call examples at the end of plans.
+iteration. Do not place plan.md at the repository root.
+
+Keep the record proportional to the work. For substantial work, make its status
+clear (for example, proposed, implemented, or investigation only), and record the
+objective and scope, important decisions or implementation, verification, and
+limitations or pending work where applicable. Distinguish actual results from planned
+checks and identify substituted data or unavailable checks. Link related iteration
+records when design and implementation are separate. Include proposed method-call
+examples at the end when relevant; for non-code work, state that they do not apply.
