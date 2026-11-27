@@ -1,0 +1,73 @@
+{% extends 'base.html' %}
+{% block content %}
+<main class="page">
+<div class="breadcrumb">SHC / Estações</div>
+<div class="layout">
+<aside class="sidebar">
+<div class="sidebar-head">
+<h2>Estações ANA</h2>
+<button type="button" id="add-station">+ Cadastrar estação</button>
+<input id="find-station" class="search" type="search" aria-label="Buscar por código ou nome" placeholder="Código ANA ou nome">
+</div>
+<div class="stations">
+{% for station_code, station in catalog %}
+<div class="station-entry">
+<a class="station {{ 'selected' if station_code == code }}" href="{{ url_for('estacoes.index', station=station_code) }}" {% if station_code == code %}aria-current="page"{% endif %}>
+<span class="station-name">{{ station.name }}</span><code>{{ station_code }}</code></a>
+<button class="danger" type="button" data-delete="{{ url_for('estacoes.delete', code=station_code) }}" data-name="{{ station.name }}" aria-label="Excluir {{ station.name }} ({{ station_code }})" title="Excluir estação">
+<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16m-10 4v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+</button>
+</div>
+{% endfor %}
+<p id="no-match" {% if catalog %}hidden{% endif %}>{{ 'Nenhuma estação encontrada.' if catalog else 'Nenhuma estação cadastrada.' }}</p>
+</div>
+</aside>
+<section id="ficha" style="min-width:0">
+{% if code %}
+<div class="chart-card"><div class="title-row"><div><h1>{{ info.name }}</h1><span class="muted">ANA {{ code }}</span></div>
+<button id="update" data-start="{{ url_for('estacoes.start', code=code) }}" data-poll="{{ url_for('estacoes.progress', code=code) }}" {% if fresh %}disabled{% endif %}>{{ 'Atualizado hoje' if fresh else 'Atualizar observações' }}</button></div>
+<div class="metadata"><span>Última atualização · {{ updated.strftime('%d/%m/%Y às %H:%M') if updated else '—' }}</span>
+<span>Última observação · {{ observed.strftime('%d/%m/%Y') if observed else '—' }}</span></div>
+<strong>{{ 'Série disponível' if available else 'Sem série disponível' }}</strong>
+<p role="status" id="refresh-status">{{ 'Falha na atualização. Tente novamente.' if status == 'failed' else '' }}</p></div>
+{% if available %}
+<article class="chart-card limits"><h2>Estatísticas das séries</h2>
+<div class="stats-scroll"><table class="stats-table"><thead><tr><th rowspan="2">Código</th><th rowspan="2">Fonte</th>
+<th colspan="6">Cota (cm)</th><th colspan="6">Vazão (m³/s)</th></tr><tr>
+{% for label in ['Início','Fim','Anos','Falhas (%)','Consist. (%)','Anos efet.'] * 2 %}<th>{{ label }}</th>{% endfor %}
+</tr></thead><tbody>{% for row in rows %}<tr>{% for value in row %}<td>{{ (value|string).replace('.', ',') if value != '' else '—' }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>
+<p class="image-note">Estatísticas originais por fonte e variável, antes da combinação das fontes e das correções pontuais.</p></article>
+<article class="chart-card limits" id="station-charts"
+data-plotly="{{ url_for('static', filename='vendor/plotly-basic-3.1.0.min.js') }}"
+data-locale="{{ url_for('static', filename='vendor/plotly-locale-pt-br-3.1.0.js') }}">
+<h2>Séries diárias</h2>
+<p id="chart-status" role="status">Carregando gráficos interativos…</p>
+<noscript><p>Ative o JavaScript para abrir os gráficos interativos.</p></noscript>
+<script id="series-data" type="application/json">{{ traces|tojson }}</script>
+<label>Período do gráfico <select id="range"><option value="1">Últimos 12 meses</option><option value="3">Últimos 3 anos</option><option value="all" selected>Série completa</option></select></label>
+{% for kind,label in [('cota','Cota (cm)'),('vazao','Vazão (m³/s)')] %}
+<h3>{{ label }}</h3><div id="{{ kind }}" aria-label="{{ label }}"></div>{% endfor %}</article>
+{% endif %}
+{% else %}
+<div class="chart-card"><h1>Estações</h1><p>Cadastre uma estação pelo código ANA para consultar suas observações.</p></div>
+{% endif %}
+</section></div></main>
+<dialog id="register-dialog" class="station-dialog" aria-labelledby="register-title">
+<form id="register-station" action="{{ url_for('estacoes.register') }}">
+<h2 id="register-title">Cadastrar estação</h2>
+<label for="station-code">Código ANA</label>
+<input id="station-code" name="code" inputmode="numeric" pattern="[0-9]{1,8}" required>
+<p role="alert" id="register-error"></p>
+<div class="dialog-actions"><button type="button" class="secondary" id="cancel-register">Cancelar</button><button type="submit">Cadastrar</button></div>
+</form>
+</dialog>
+<dialog id="delete-dialog" class="station-dialog" aria-labelledby="delete-title">
+<h2 id="delete-title">Excluir estação</h2>
+<p id="delete-confirmation"></p>
+<p role="alert" id="delete-error"></p>
+<div class="dialog-actions"><button type="button" class="secondary" id="cancel-delete" autofocus>Cancelar</button><button type="button" class="danger" id="confirm-delete">Excluir</button></div>
+</dialog>
+{% include 'progress_dialog.html' %}
+<script async src="{{ url_for('static', filename='progress_dialog.js', v='2') }}"></script>
+<script src="{{ url_for('static',filename='estacoes.js', v='4') }}" data-status="{{ status }}" defer></script>
+{% endblock %}

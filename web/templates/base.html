@@ -27,6 +27,7 @@
 </div>
 <nav aria-label="Módulos da SHC" class="tabs">
 <a class="{{ 'active' if active == 'home' else '' }}" href="{{ url_for('home') }}">Início</a>
+<a class="{{ 'active' if active == 'estacoes' else '' }}" href="{{ url_for('estacoes.index') }}">Estações</a>
 <a class="{{ 'active' if active == 'permanencia' else '' }}" href="{{ url_for('permanencia.index') }}">Curvas de Permanência</a>
 <a aria-disabled="true" tabindex="-1">Chuvas <small>Em breve</small>
 </a>

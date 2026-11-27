@@ -16,6 +16,7 @@ services:
       - "127.0.0.1:${SHC_HOST_PORT:-8000}:8000"
     volumes:
       - shc-sessions:/tmp/shc-sessions
+      - shc-estacoes:/data/CN3S/estacoes
       - type: bind
         source: ${SHC_DURATION_CURVES_HOST_DIR:?Defina SHC_DURATION_CURVES_HOST_DIR com a pasta de curvas no host}
         target: /data/CN3S/Exceedance
@@ -25,3 +26,4 @@ services:
 
 volumes:
   shc-sessions:
+  shc-estacoes:

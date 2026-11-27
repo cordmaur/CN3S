@@ -6,7 +6,7 @@ import os
 import secrets
 from datetime import timedelta
 from pathlib import Path
-from threading import Lock
+from threading import Lock, RLock
 from typing import Any
 
 from cachelib import FileSystemCache, SimpleCache
@@ -17,7 +17,7 @@ from werkzeug.wrappers import Response
 # Keep scientific plotting headless in development as well as in the image.
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from web import cn3s, login, permanencia
+from web import cn3s, estacoes, login, permanencia
 
 
 def create_app(config: dict[str, Any] | None = None) -> Flask:
@@ -55,6 +55,7 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
             )
         ),
         SHC_CN3S_DATA_DIR=Path(os.environ.get("SHC_CN3S_DATA_DIR", "/data/CN3S")),
+        SHC_STATIONS_DIR=Path(os.environ.get("SHC_STATIONS_DIR", "/data/CN3S/estacoes")),
         SHC_STATES_PATH=Path(
             os.getenv("SHC_STATES_PATH", "/data/Geospatial_BR_Data/BR_UF_2022/BR_UF_2022.shp")
         ),
@@ -75,9 +76,9 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
     app.extensions["shc_render_lock"] = Lock()
     app.extensions["cn3s_lock"] = Lock()
     app.extensions["shc_run_id"] = secrets.token_urlsafe(16)
-    app.register_blueprint(login.bp)
-    app.register_blueprint(permanencia.bp)
-    app.register_blueprint(cn3s.bp)
+    app.extensions["estacoes"] = {"lock": RLock(), "jobs": {}}
+    for blueprint in (login.bp, estacoes.bp, permanencia.bp, cn3s.bp):
+        app.register_blueprint(blueprint)
 
     @app.before_request
     def check_session() -> Response | tuple[Response | str, int] | None:

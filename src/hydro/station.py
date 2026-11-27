@@ -16,6 +16,8 @@ from .hydro_stats import HydroStats
 from .telemetria import Telemetria
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from matplotlib.axes import Axes
     from mergedownloader.downloader import Downloader
 
@@ -419,6 +421,7 @@ class Station:
         end: str | None = None,
         source: Source = "hidro/telemetria",
         series_type: SeriesType | None = None,
+        progress: Callable[[int, str], None] | None = None,
     ) -> None:
         """
         Load daily observations by station code and calculate quality statistics.
@@ -433,6 +436,7 @@ class Station:
             end: Inclusive last date; omit for the complete available record.
             source: Historical, telemetric, or both sources (the default).
             series_type: Stage (cota, cm) or discharge (vazao, m³/s); None loads both.
+            progress: Optional callback receiving stage percentage and Portuguese log text.
 
         """
         if self.connector is None:
@@ -446,35 +450,54 @@ class Station:
             validate_series_type(series_type)
         kinds = ("cota", "vazao") if series_type is None else (series_type,)
         # Skip telemetry inventory entirely for a historical-only request.
+        if progress and "telemetria" in source:
+            progress(5, "Buscando os códigos vinculados no inventário da Telemetria.")
         self.telemetric_info = (
             self.telemetria.get_telemetric_code(self.code) if "telemetria" in source else None
         )
+        telemetry_codes = (
+            [int(code) for code in self.telemetric_info.index]
+            if self.telemetric_info is not None
+            else []
+        )
+        if progress and "telemetria" in source:
+            codes = ", ".join(map(str, telemetry_codes))
+            progress(
+                10,
+                f"Códigos telemétricos encontrados: {codes}."
+                if codes
+                else "Nenhum código telemétrico vinculado.",
+            )
+        providers = [(self.code, "Hidro", self.hidro.get_series)] if "hidro" in source else []
+        providers.extend(
+            (code, "Telemetria (Datamart)", self.telemetria.get_series) for code in telemetry_codes
+        )
 
-        # Keep the existing shape expected by get_series and calc_stats without querying
-        # sources or measurements that were not requested.
+        # Keep the empty frames expected by callers when only one type/source is loaded.
         self.series: dict[int, dict[SeriesType, pd.DataFrame]] = {
-            self.code: {kind: empty_series() for kind in ("cota", "vazao")},
+            code: {kind: empty_series() for kind in ("cota", "vazao")}
+            for code in [self.code, *telemetry_codes]
         }
-        if "hidro" in source:
-            for kind in kinds:
-                self.series[self.code][kind] = self.hidro.get_series(
-                    self.code,
-                    kind,
-                    start=start,
-                    end=end,
+        queries = [(kind, *provider) for kind in kinds for provider in providers]
+        for completed, (kind, code, label, read) in enumerate(queries):
+            measurement = "Cota" if kind == "cota" else "Vazão"
+            description = f"{measurement} · {label} · {code}"
+            if progress:
+                progress(10 + 65 * completed // len(queries), f"{description} — consultando.")
+            frame = read(code, kind, start=start, end=end)
+            self.series[code][kind] = frame
+            if progress:
+                coverage = (
+                    f" ({frame.index.min():%d/%m/%Y} a {frame.index.max():%d/%m/%Y})"
+                    if not frame.empty
+                    else ""
                 )
-
-        if self.telemetric_info is not None:
-            for code in self.telemetric_info.index:
-                self.series[int(code)] = {kind: empty_series() for kind in ("cota", "vazao")}
-                for kind in kinds:
-                    self.series[int(code)][kind] = self.telemetria.get_series(
-                        int(code),
-                        kind,
-                        start=start,
-                        end=end,
-                    )
-
+                progress(
+                    10 + 65 * (completed + 1) // len(queries),
+                    f"{description} — {len(frame)} registros diários{coverage}.",
+                )
+        if progress:
+            progress(77, "Calculando estatísticas diárias por fonte.")
         self.calc_stats()
 
     def get_source(self, station_code: int) -> str:
