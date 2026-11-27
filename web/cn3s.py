@@ -1365,8 +1365,10 @@ def index(step: str) -> str:
                 stations.append({"code": code, "name": name})
             except (OSError, ValueError, KeyError):
                 stations.append({"code": int(path.parent.name), "name": "Metadados inválidos"})
+    script = Path(__file__).with_name("static") / "cn3s.js"
     return render_template(
         "cn3s.html",
+        script_version=hashlib.sha256(script.read_bytes()).hexdigest()[:12],
         active="cn3s",
         step=step,
         title={"estacao": "Estação", "calibrar": "Calibrar Estação", "previsao": "Previsão"}[step],

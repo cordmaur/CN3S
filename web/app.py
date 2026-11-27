@@ -33,6 +33,8 @@ def create_app(config: dict[str, Any] | None = None) -> Flask:
     """
     app = Flask(__name__, static_url_path="/shc/static")
     app.config.update(
+        # Source updates can change the HTML and its controls without changing Python modules.
+        TEMPLATES_AUTO_RELOAD=True,
         SECRET_KEY=os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32),
         SESSION_TYPE="cachelib",
         SESSION_CACHELIB=FileSystemCache(

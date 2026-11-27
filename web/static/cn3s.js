@@ -40,6 +40,7 @@
   }
   async function stationPage() {
     const select = $('cn-station'), dialog = $('cn-dialog');
+    const monthlyForm = $('cn-monthly-form');
     const wait = () => new Promise(resolve => setTimeout(resolve, 1100));
     let current = null, variable = 'cota', creating = false, mapKey = '', monthlyBusy = false;
     const monthlyQuery = new URLSearchParams(location.search);
@@ -268,7 +269,7 @@
       }
     }
 
-    async function load(existingId) {
+    async function load(existingId, resumeMonthly = false) {
       const code = select.value, version = ++selection;
       const pending = refreshes.get(code);
       $('cn-series-progress').hidden = true; $('cn-refresh').disabled = monthlyBusy;
@@ -281,10 +282,19 @@
         const data = await api('/stations/' + code + '?view=station');
         if (version !== selection) return;
         renderFicha(data); status();
-        $('cn-monthly-status').textContent = '';
-        $('cn-monthly-coverage').textContent = 'Carregando cobertura mensal…';
-        await monthlyCoverage(true);
         if (existingId || pending) await updateStats(existingId, pending);
+        if (!monthlyForm || version !== selection || resumeMonthly) return;
+        $('cn-monthly-status').textContent = '';
+        const coverage = $('cn-monthly-coverage');
+        coverage.textContent = 'Carregando cobertura mensal…';
+        $('cn-monthly-fields').disabled = true;
+        try {
+          await monthlyCoverage(true);
+        } catch (exc) {
+          if (version === selection) coverage.textContent = 'Cobertura mensal indisponível. ' + exc.message;
+        } finally {
+          if (version === selection) $('cn-monthly-fields').disabled = false;
+        }
       } catch (exc) {
         if (version === selection) $('cn-station-info').textContent = exc.message;
       }
@@ -321,7 +331,7 @@
 
     select.onchange = () => load();
     $('cn-refresh').onclick = () => updateStats();
-    $('cn-monthly-form').onsubmit = event => { event.preventDefault(); updateMonthly(); };
+    monthlyForm?.addEventListener('submit', event => { event.preventDefault(); updateMonthly(); });
     document.querySelectorAll('[data-series]').forEach(button => {
       button.onclick = () => { variable = button.dataset.series; renderSeries(); };
     });
@@ -344,8 +354,9 @@
       await create(String(job.code), id); await original;
     } else {
       const resume = job?.status === 'running' && job.kind === 'overview' && String(job.code) === select.value;
-      await load(resume ? id : null);
-      if (job?.status === 'running' && job.kind === 'inputs' && String(job.code) === select.value) {
+      const inputs = monthlyForm && job?.status === 'running' && job.kind === 'inputs' && String(job.code) === select.value;
+      await load(resume ? id : null, inputs);
+      if (inputs) {
         await updateMonthly(id, job.settings);
       }
     }
@@ -780,8 +791,9 @@
       const required = lead ? nextMonth(lead, -1).slice(0, 7) : '';
       const rain = station?.series.rain;
       const needsRain = Boolean(station && required && (!rain?.end || rain.end.slice(0, 7) < required || rain.missing));
-      $('cn-update-rain-wrap').hidden = busy || !needsRain;
-      if (needsRain) {
+      const rainShortcut = $('cn-update-rain-wrap');
+      if (rainShortcut) rainShortcut.hidden = busy || !needsRain;
+      if (rainShortcut && needsRain) {
         const first = rain?.end && rain.end.slice(0, 7) < required ? nextMonth(rain.end, 1).slice(0, 7) : rain?.start?.slice(0, 7) || '2000-01';
         $('cn-update-rain').href = monthlyLink(stationSelect.value, 'rain', first, required);
       }
